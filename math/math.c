@@ -3,6 +3,16 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+#ifndef M_PI
+#define M_PI    3.14159265358979323846
+#endif
+#ifndef M_E
+#define M_E     2.71828182845904523536
+#endif
+#ifndef M_SQRT2
+#define M_SQRT2 1.41421356237309504880
+#endif
+
 /* ── Trig ─────────────────────────────────────────────── */
 double math_sin(double x)        { return sin(x); }
 double math_cos(double x)        { return cos(x); }
