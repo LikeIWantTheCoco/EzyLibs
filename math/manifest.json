@@ -7,5 +7,5 @@
   "header":       "math.ez",
   "binary":       "libmath.so",
   "dependencies": [],
-  "link_flags":   ["-lm"]
+  "link_flags":   ["-lm", "-DM_PI=3.14159265358979323846", "-DM_E=2.71828182845904523536"]
 }
