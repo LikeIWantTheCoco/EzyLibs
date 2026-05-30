@@ -1,0 +1,11 @@
+{
+  "name":         "math",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "Comprehensive math library: trig, exp/log, rounding, integer math, interpolation and more",
+  "sources":      ["math.c"],
+  "header":       "math.ez",
+  "binary":       "libmath.so",
+  "dependencies": [],
+  "link_flags":   ["-lm"]
+}
