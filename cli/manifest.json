@@ -1,0 +1,11 @@
+{
+  "name":         "cli",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "Reactive terminal UI for Ezy: pinned variables that redraw in place, plus picker/progress/spinner/box templates and styling",
+  "sources":      ["cli.c"],
+  "header":       "cli.ez",
+  "binary":       "libcli.so",
+  "dependencies": [],
+  "link_flags":   []
+}

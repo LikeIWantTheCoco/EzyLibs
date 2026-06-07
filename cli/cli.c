@@ -1,0 +1,363 @@
+/* ═══════════════════════════════════════════════════════════════
+   cli — reactive terminal UI for Ezy.
+
+   CLI variables are named string values anchored to a position on the
+   screen. cli_print(name) draws a variable where the cursor is and
+   remembers that spot; afterwards, cli_set(name, value) redraws it in
+   place — no reprint, no flicker, no manual coordinate bookkeeping.
+
+       cli_set("Greeting", "Hola")      # not shown yet
+       cli_print("Greeting")            # shows "Hola"
+       cli_set("Greeting", "Adios")     # the on-screen "Hola" becomes "Adios"
+
+   Position is discovered with an ANSI cursor-position query (DSR), so it
+   works on a real terminal; when stdout/stdin is not a TTY it degrades
+   to plain printing.
+
+   Build: gcc -shared -fPIC cli.c -o libcli.so
+   ═══════════════════════════════════════════════════════════════ */
+#define _POSIX_C_SOURCE 200809L
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <termios.h>
+#include <poll.h>
+
+#define MAX_VARS 256
+#define MAX_OPTS 64
+
+typedef struct {
+    char *name;
+    char *value;        /* current rendered text (may contain '\n') */
+    int   used;
+    int   shown;        /* has been cli_print'd */
+    int   hidden;       /* currently hidden (blanked) */
+    int   row, col;     /* top-left anchor (1-based) */
+    int   lines;        /* line count of the last drawn value (for clearing) */
+    /* picker */
+    int   is_picker;
+    char *opts[MAX_OPTS];
+    int   nopts, sel, vertical;
+} CliVar;
+
+static CliVar g_vars[MAX_VARS];
+static int    g_tty = -1;   /* lazily: 1 if interactive */
+
+static int is_tty(void) {
+    if (g_tty < 0) g_tty = (isatty(STDOUT_FILENO) && isatty(STDIN_FILENO)) ? 1 : 0;
+    return g_tty;
+}
+
+static CliVar *find(const char *name) {
+    if (!name) return NULL;
+    for (int i = 0; i < MAX_VARS; i++)
+        if (g_vars[i].used && strcmp(g_vars[i].name, name) == 0) return &g_vars[i];
+    return NULL;
+}
+static CliVar *get_or_new(const char *name) {
+    CliVar *v = find(name);
+    if (v) return v;
+    for (int i = 0; i < MAX_VARS; i++)
+        if (!g_vars[i].used) {
+            g_vars[i].used = 1;
+            g_vars[i].name = strdup(name);
+            g_vars[i].value = strdup("");
+            return &g_vars[i];
+        }
+    return NULL;
+}
+
+/* ── cursor position query (DSR) ── */
+static int query_cursor(int *row, int *col) {
+    if (!is_tty()) return 0;
+    struct termios old, raw;
+    if (tcgetattr(STDIN_FILENO, &old) != 0) return 0;
+    raw = old;
+    raw.c_lflag &= ~(unsigned)(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    if (write(STDOUT_FILENO, "\033[6n", 4) != 4) { tcsetattr(STDIN_FILENO, TCSANOW, &old); return 0; }
+    char buf[32]; int i = 0;
+    struct pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
+    while (i < 31) {
+        if (poll(&pfd, 1, 120) <= 0) break;       /* timeout → give up */
+        char c; if (read(STDIN_FILENO, &c, 1) != 1) break;
+        buf[i++] = c;
+        if (c == 'R') break;
+    }
+    buf[i] = '\0';
+    tcsetattr(STDIN_FILENO, TCSANOW, &old);
+    return sscanf(buf, "\033[%d;%dR", row, col) == 2;
+}
+
+/* count lines + clamp helper */
+static int count_lines(const char *s) {
+    int n = 1; for (const char *p = s; *p; p++) if (*p == '\n') n++;
+    return n;
+}
+
+/* draw `val` at (row,col), clearing up to old_lines previous rows.
+   returns the new line count. */
+static int draw_at(int row, int col, const char *val, int old_lines) {
+    fputs("\033[s", stdout);                  /* save cursor */
+    int line = 0; const char *p = val;
+    for (;;) {
+        const char *nl = strchr(p, '\n');
+        int len = nl ? (int)(nl - p) : (int)strlen(p);
+        printf("\033[%d;%dH\033[K%.*s", row + line, col, len, p);
+        line++;
+        if (!nl) break;
+        p = nl + 1;
+    }
+    for (int e = line; e < old_lines; e++)     /* clear leftover old lines */
+        printf("\033[%d;%dH\033[K", row + e, col);
+    fputs("\033[u", stdout);                   /* restore cursor */
+    fflush(stdout);
+    return line;
+}
+
+/* blank the region with spaces (keeps layout) */
+static void blank_at(int row, int col, const char *val) {
+    fputs("\033[s", stdout);
+    int line = 0; const char *p = val;
+    for (;;) {
+        const char *nl = strchr(p, '\n');
+        int len = nl ? (int)(nl - p) : (int)strlen(p);
+        printf("\033[%d;%dH", row + line, col);
+        for (int k = 0; k < len; k++) fputc(' ', stdout);
+        line++;
+        if (!nl) break;
+        p = nl + 1;
+    }
+    fputs("\033[u", stdout);
+    fflush(stdout);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Core API
+   ═══════════════════════════════════════════════════════════════ */
+
+/* set / update a CLI variable; redraws in place if already shown */
+long long cli_set(const char *name, const char *value) {
+    CliVar *v = get_or_new(name);
+    if (!v) return 0;
+    int old_lines = v->lines;
+    free(v->value);
+    v->value = strdup(value ? value : "");
+    if (v->shown && !v->hidden) {
+        if (is_tty()) v->lines = draw_at(v->row, v->col, v->value, old_lines);
+        else { printf("%s\n", v->value); fflush(stdout); }   /* non-tty: just echo */
+    } else {
+        v->lines = count_lines(v->value);
+    }
+    return 1;
+}
+char *cli_get(const char *name) {
+    CliVar *v = find(name);
+    return strdup(v ? v->value : "");
+}
+
+/* render a variable where the cursor is; remembers the spot */
+long long cli_print(const char *name) {
+    CliVar *v = get_or_new(name);
+    if (!v) return 0;
+    v->shown = 1; v->hidden = 0;
+    if (is_tty() && query_cursor(&v->row, &v->col)) {
+        v->lines = draw_at(v->row, v->col, v->value, 0);
+        /* advance the real cursor to the line after the widget */
+        printf("\033[%d;1H", v->row + v->lines);
+        fflush(stdout);
+    } else {
+        printf("%s\n", v->value);     /* fallback / non-interactive */
+        fflush(stdout);
+        v->lines = count_lines(v->value);
+    }
+    return 1;
+}
+
+/* hide: blank the region with spaces (layout preserved) */
+long long cli_hide(const char *name) {
+    CliVar *v = find(name);
+    if (!v || !v->shown || v->hidden) return 0;
+    if (is_tty()) blank_at(v->row, v->col, v->value);
+    v->hidden = 1;
+    return 1;
+}
+/* show again after hide */
+long long cli_show(const char *name) {
+    CliVar *v = find(name);
+    if (!v || !v->shown || !v->hidden) return 0;
+    if (is_tty()) v->lines = draw_at(v->row, v->col, v->value, v->lines);
+    v->hidden = 0;
+    return 1;
+}
+
+/* replace what `name` shows with `other`'s value (in name's region) */
+long long cli_replace(const char *name, const char *other) {
+    CliVar *v = find(name); CliVar *o = find(other);
+    if (!v || !o) return 0;
+    return cli_set(name, o->value);
+}
+
+/* forget a variable and clear its region */
+long long cli_remove(const char *name) {
+    CliVar *v = find(name);
+    if (!v) return 0;
+    if (v->shown && is_tty()) blank_at(v->row, v->col, v->value);
+    free(v->name); free(v->value);
+    for (int i = 0; i < v->nopts; i++) free(v->opts[i]);
+    memset(v, 0, sizeof *v);
+    return 1;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Screen / cursor control
+   ═══════════════════════════════════════════════════════════════ */
+long long cli_clear(void)       { if (is_tty()) { fputs("\033[2J\033[H", stdout); fflush(stdout);} return 0; }
+long long cli_cursor_hide(void) { if (is_tty()) { fputs("\033[?25l", stdout); fflush(stdout);} return 0; }
+long long cli_cursor_show(void) { if (is_tty()) { fputs("\033[?25h", stdout); fflush(stdout);} return 0; }
+long long cli_move(long long row, long long col) {
+    if (is_tty()) { printf("\033[%lld;%lldH", row, col); fflush(stdout); }
+    return 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Styling helpers — return styled strings to use as values
+   ═══════════════════════════════════════════════════════════════ */
+static const char *color_code(const char *c) {
+    if (!c) return "0";
+    if (!strcmp(c,"red"))     return "31";
+    if (!strcmp(c,"green"))   return "32";
+    if (!strcmp(c,"yellow"))  return "33";
+    if (!strcmp(c,"blue"))    return "34";
+    if (!strcmp(c,"magenta")) return "35";
+    if (!strcmp(c,"cyan"))    return "36";
+    if (!strcmp(c,"white"))   return "37";
+    if (!strcmp(c,"grey") || !strcmp(c,"gray")) return "90";
+    return "0";
+}
+char *cli_color(const char *text, const char *color) {
+    if (!text) text = "";
+    size_t n = strlen(text) + 24;
+    char *o = malloc(n);
+    snprintf(o, n, "\033[%sm%s\033[0m", color_code(color), text);
+    return o;
+}
+char *cli_bold(const char *text) {
+    if (!text) text = "";
+    size_t n = strlen(text) + 12; char *o = malloc(n);
+    snprintf(o, n, "\033[1m%s\033[0m", text); return o;
+}
+char *cli_dim(const char *text) {
+    if (!text) text = "";
+    size_t n = strlen(text) + 12; char *o = malloc(n);
+    snprintf(o, n, "\033[2m%s\033[0m", text); return o;
+}
+
+/* a unicode box around (single-line) text → multi-line string */
+char *cli_box(const char *text) {
+    if (!text) text = "";
+    int w = (int)strlen(text);
+    /* top + sides + bottom; box-drawing chars are 3 bytes each in UTF-8 */
+    size_t cap = (size_t)(w + 8) * 4 + 64;
+    char *o = malloc(cap); char *p = o;
+    p += sprintf(p, "┌");
+    for (int i = 0; i < w + 2; i++) p += sprintf(p, "─");
+    p += sprintf(p, "┐\n│ %s │\n└", text);
+    for (int i = 0; i < w + 2; i++) p += sprintf(p, "─");
+    p += sprintf(p, "┘");
+    return o;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Templates
+   ═══════════════════════════════════════════════════════════════ */
+/* render a picker's current state into its value, then redraw if shown */
+static void picker_render(CliVar *v) {
+    size_t cap = 64;
+    for (int i = 0; i < v->nopts; i++) cap += strlen(v->opts[i]) + 24;
+    char *buf = malloc(cap); buf[0] = '\0'; char *p = buf;
+    for (int i = 0; i < v->nopts; i++) {
+        int on = (i == v->sel);
+        if (v->vertical) {
+            if (on) p += sprintf(p, "\033[36m❯ %s\033[0m", v->opts[i]);
+            else    p += sprintf(p, "  %s", v->opts[i]);
+            if (i < v->nopts - 1) *p++ = '\n';
+        } else {
+            if (on) p += sprintf(p, "\033[7m %s \033[0m", v->opts[i]);
+            else    p += sprintf(p, " %s ", v->opts[i]);
+        }
+    }
+    *p = '\0';
+    cli_set(v->name, buf);
+    free(buf);
+}
+
+/* create a picker. `options` is a newline-separated list. dir: "vertical"/"horizontal" */
+long long cli_picker(const char *name, const char *dir, const char *options) {
+    CliVar *v = get_or_new(name);
+    if (!v) return 0;
+    for (int i = 0; i < v->nopts; i++) free(v->opts[i]);
+    v->nopts = 0; v->sel = 0; v->is_picker = 1;
+    v->vertical = (dir && strcmp(dir, "horizontal") == 0) ? 0 : 1;
+    const char *p = options ? options : "";
+    while (*p && v->nopts < MAX_OPTS) {
+        const char *nl = strchr(p, '\n');
+        int len = nl ? (int)(nl - p) : (int)strlen(p);
+        char *o = malloc(len + 1); memcpy(o, p, len); o[len] = '\0';
+        v->opts[v->nopts++] = o;
+        if (!nl) break;
+        p = nl + 1;
+    }
+    picker_render(v);
+    return 1;
+}
+long long cli_picker_down(const char *name) {
+    CliVar *v = find(name);
+    if (!v || !v->is_picker || v->nopts == 0) return 0;
+    v->sel = (v->sel + 1) % v->nopts; picker_render(v); return v->sel;
+}
+long long cli_picker_up(const char *name) {
+    CliVar *v = find(name);
+    if (!v || !v->is_picker || v->nopts == 0) return 0;
+    v->sel = (v->sel - 1 + v->nopts) % v->nopts; picker_render(v); return v->sel;
+}
+long long cli_picker_select(const char *name, long long i) {
+    CliVar *v = find(name);
+    if (!v || !v->is_picker || i < 0 || i >= v->nopts) return 0;
+    v->sel = (int)i; picker_render(v); return 1;
+}
+long long cli_picker_index(const char *name) {
+    CliVar *v = find(name);
+    return (v && v->is_picker) ? v->sel : -1;
+}
+char *cli_picker_value(const char *name) {
+    CliVar *v = find(name);
+    if (!v || !v->is_picker || v->sel < 0 || v->sel >= v->nopts) return strdup("");
+    return strdup(v->opts[v->sel]);
+}
+
+/* a progress bar value: [#####-----]  42%  — store under `name` */
+long long cli_progress(const char *name, long long percent, long long width) {
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    if (width <= 0) width = 20;
+    char *buf = malloc((size_t)width * 4 + 32);
+    char *p = buf; *p++ = '[';
+    long long fill = percent * width / 100;
+    for (long long i = 0; i < width; i++) p += sprintf(p, "%s", i < fill ? "█" : "░");
+    sprintf(p, "] %3lld%%", percent);
+    cli_set(name, buf);
+    free(buf);
+    return 1;
+}
+
+/* spinner: advance one frame and store under `name` */
+long long cli_spinner(const char *name) {
+    static const char *frames[] = {"⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"};
+    CliVar *v = get_or_new(name);
+    if (!v) return 0;
+    int f = (v->sel + 1) % 10; v->sel = f;
+    cli_set(name, frames[f]);
+    return 0;
+}
