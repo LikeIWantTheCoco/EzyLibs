@@ -168,24 +168,33 @@ char *cli_get(const char *name) {
     return strdup(v ? v->value : "");
 }
 
-/* render a variable where the cursor is; remembers the spot */
+/* render a variable where the cursor is; remembers the spot.
+   The value is printed with a trailing newline so the cursor advances
+   naturally (scrolling the screen if we are on the last row); the anchor
+   is then computed from the post-print position, so later updates land on
+   the right line and the shell prompt ends up *below* the widget. */
 long long cli_print(const char *name) {
     CliVar *v = get_or_new(name);
     if (!v) return 0;
     v->shown = 1; v->hidden = 0;
-    if (is_tty() && query_cursor(&v->row, &v->col)) {
-        v->positioned = 1;
-        v->lines = draw_at(v->row, v->col, v->value, 0);
-        /* advance the real cursor to the line after the widget */
-        printf("\033[%d;1H", v->row + v->lines);
+    v->lines = count_lines(v->value);
+    if (is_tty()) {
+        int sr, sc;
+        int ok_start = query_cursor(&sr, &sc);
+        printf("%s\n", v->value);                 /* natural flow → scrolls if needed */
         fflush(stdout);
+        int er, ec;
+        if (ok_start && query_cursor(&er, &ec)) {
+            v->positioned = 1;
+            v->row = er - v->lines;                /* top row of the widget */
+            v->col = sc;
+        } else {
+            v->positioned = 0;
+        }
     } else {
-        /* no cursor query → can't anchor; print plainly and don't try to
-           reposition later (that would corrupt the screen) */
         v->positioned = 0;
         printf("%s\n", v->value);
         fflush(stdout);
-        v->lines = count_lines(v->value);
     }
     return 1;
 }
