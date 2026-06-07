@@ -1,0 +1,11 @@
+{
+  "name":         "regex",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "Perl-compatible regular expressions for Ezy (wraps PCRE2): match, find, groups, replace, iteration",
+  "sources":      ["regex.c"],
+  "header":       "regex.ez",
+  "binary":       "libregex.so",
+  "dependencies": [],
+  "link_flags":   ["-lpcre2-8"]
+}

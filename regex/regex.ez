@@ -1,0 +1,24 @@
+# ── regex: Perl-compatible regular expressions (wraps PCRE2) ──
+# Supports \d \w \s, quantifiers, groups, alternation, lookaround,
+# named groups, etc. Match objects are opaque integer handles; free
+# them with regex_match_free.
+
+# ── Convenience (compiles the pattern each call) ──────
+extern fn regex_match(pattern: string, text: string) -> int     # matches anywhere? 1/0
+extern fn regex_find(pattern: string, text: string) -> string    # first whole match, "" if none
+extern fn regex_group(pattern: string, text: string, n: int) -> string  # nth group of first match
+extern fn regex_count(pattern: string, text: string) -> int      # number of matches
+extern fn regex_replace(pattern: string, text: string, repl: string) -> string        # replace all ($1 backrefs)
+extern fn regex_replace_first(pattern: string, text: string, repl: string) -> string  # replace first
+extern fn regex_valid(pattern: string) -> int                    # is the pattern compilable?
+
+# ── Match object: iterate matches + read groups ───────
+extern fn regex_exec(pattern: string, text: string) -> int       # first match -> handle (0 if none)
+extern fn regex_next(m: int) -> int                              # advance to next match (1/0)
+extern fn regex_match_str(m: int) -> string                       # current whole match
+extern fn regex_match_start(m: int) -> int                        # start offset (-1 if invalid)
+extern fn regex_match_end(m: int) -> int                          # end offset
+extern fn regex_group_count(m: int) -> int                        # number of capture groups
+extern fn regex_match_group(m: int, n: int) -> string             # nth group (0 = whole match)
+extern fn regex_named(m: int, name: string) -> string             # named group (?<name>...)
+extern fn regex_match_free(m: int) -> int
