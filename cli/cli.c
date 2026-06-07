@@ -32,6 +32,7 @@ typedef struct {
     char *value;        /* current rendered text (may contain '\n') */
     int   used;
     int   shown;        /* has been cli_print'd */
+    int   positioned;   /* 1 if we know its real (row,col) — DSR succeeded */
     int   hidden;       /* currently hidden (blanked) */
     int   row, col;     /* top-left anchor (1-based) */
     int   lines;        /* line count of the last drawn value (for clearing) */
@@ -154,9 +155,9 @@ long long cli_set(const char *name, const char *value) {
     int old_lines = v->lines;
     free(v->value);
     v->value = strdup(value ? value : "");
-    if (v->shown && !v->hidden) {
-        if (is_tty()) v->lines = draw_at(v->row, v->col, v->value, old_lines);
-        else { printf("%s\n", v->value); fflush(stdout); }   /* non-tty: just echo */
+    /* redraw in place only when we actually know where it is (DSR worked) */
+    if (v->shown && v->positioned && !v->hidden) {
+        v->lines = draw_at(v->row, v->col, v->value, old_lines);
     } else {
         v->lines = count_lines(v->value);
     }
@@ -173,12 +174,16 @@ long long cli_print(const char *name) {
     if (!v) return 0;
     v->shown = 1; v->hidden = 0;
     if (is_tty() && query_cursor(&v->row, &v->col)) {
+        v->positioned = 1;
         v->lines = draw_at(v->row, v->col, v->value, 0);
         /* advance the real cursor to the line after the widget */
         printf("\033[%d;1H", v->row + v->lines);
         fflush(stdout);
     } else {
-        printf("%s\n", v->value);     /* fallback / non-interactive */
+        /* no cursor query → can't anchor; print plainly and don't try to
+           reposition later (that would corrupt the screen) */
+        v->positioned = 0;
+        printf("%s\n", v->value);
         fflush(stdout);
         v->lines = count_lines(v->value);
     }
@@ -189,7 +194,7 @@ long long cli_print(const char *name) {
 long long cli_hide(const char *name) {
     CliVar *v = find(name);
     if (!v || !v->shown || v->hidden) return 0;
-    if (is_tty()) blank_at(v->row, v->col, v->value);
+    if (is_tty() && v->positioned) blank_at(v->row, v->col, v->value);
     v->hidden = 1;
     return 1;
 }
@@ -197,7 +202,7 @@ long long cli_hide(const char *name) {
 long long cli_show(const char *name) {
     CliVar *v = find(name);
     if (!v || !v->shown || !v->hidden) return 0;
-    if (is_tty()) v->lines = draw_at(v->row, v->col, v->value, v->lines);
+    if (is_tty() && v->positioned) v->lines = draw_at(v->row, v->col, v->value, v->lines);
     v->hidden = 0;
     return 1;
 }
@@ -213,7 +218,7 @@ long long cli_replace(const char *name, const char *other) {
 long long cli_remove(const char *name) {
     CliVar *v = find(name);
     if (!v) return 0;
-    if (v->shown && is_tty()) blank_at(v->row, v->col, v->value);
+    if (v->shown && v->positioned && is_tty()) blank_at(v->row, v->col, v->value);
     free(v->name); free(v->value);
     for (int i = 0; i < v->nopts; i++) free(v->opts[i]);
     memset(v, 0, sizeof *v);
