@@ -170,6 +170,20 @@ char *cli_get(const char *name) {
     return strdup(v ? v->value : "");
 }
 
+/* print plain, non-reactive text (with newline) at the cursor — use this
+   for static lines/spacing, not cli_print which expects a variable name */
+long long cli_text(const char *text) {
+    printf("%s\n", text ? text : "");
+    fflush(stdout);
+    return 0;
+}
+/* a blank line */
+long long cli_newline(void) {
+    fputc('\n', stdout);
+    fflush(stdout);
+    return 0;
+}
+
 /* render a variable where the cursor is; remembers the spot.
    The value is printed with a trailing newline so the cursor advances
    naturally (scrolling the screen if we are on the last row); the anchor

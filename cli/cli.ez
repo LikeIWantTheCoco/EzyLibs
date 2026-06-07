@@ -18,6 +18,10 @@
 # The value is optional:  Example = cli_var("Example")
 extern fn cli_var(name: string, value: string = "") -> string
 extern fn cli_set(name: string, value: string) -> int   # set/update (redraws if shown)
+# Plain (non-reactive) output — for static lines/spacing. Do NOT use
+# cli_print for literal text: cli_print expects a variable NAME.
+extern fn cli_text(text: string) -> int                  # print a literal line
+extern fn cli_newline() -> int                           # a blank line
 extern fn cli_get(name: string) -> string
 extern fn cli_print(name: string) -> int                 # draw at cursor, remember position
 extern fn cli_hide(name: string) -> int                  # blank the region (keeps layout)
