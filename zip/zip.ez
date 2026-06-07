@@ -1,0 +1,24 @@
+# ── zip: read and write .zip archives (wraps libzip) ──────────
+# Archives are opaque integer handles. Build with zip_create, add
+# entries, then zip_save (writes + closes). Read with zip_load.
+
+# ── Open / create / save ──────────────────────────────
+extern fn zip_create(path: string) -> int        # new archive -> handle (0 on error)
+extern fn zip_load(path: string) -> int           # open an existing archive -> handle
+extern fn zip_save(z: int) -> int                  # commit changes and close (1 ok)
+extern fn zip_discard_changes(z: int) -> int       # close without writing
+
+# ── Add entries ───────────────────────────────────────
+extern fn zip_add_text(z: int, name: string, text: string) -> int   # entry from a string
+extern fn zip_add_file(z: int, name: string, srcpath: string) -> int # entry from a file on disk
+
+# ── Inspect ───────────────────────────────────────────
+extern fn zip_count(z: int) -> int                 # number of entries
+extern fn zip_name(z: int, i: int) -> string        # i-th entry name
+extern fn zip_has(z: int, name: string) -> int      # is `name` in the archive?
+
+# ── Read / extract ────────────────────────────────────
+extern fn zip_read(z: int, name: string) -> string         # entry contents as text
+extern fn zip_extract(z: int, name: string, destpath: string) -> int  # extract entry to disk
+
+extern fn zip_version() -> string

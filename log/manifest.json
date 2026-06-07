@@ -1,0 +1,11 @@
+{
+  "name":         "log",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "Leveled, timestamped, thread-safe logging for Ezy (debug/info/warn/error, file or stderr, colors)",
+  "sources":      ["log.c"],
+  "header":       "log.ez",
+  "binary":       "liblog.so",
+  "dependencies": [],
+  "link_flags":   ["-lpthread"]
+}

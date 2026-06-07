@@ -1,0 +1,11 @@
+{
+  "name":         "crypto",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "Hashing, HMAC, base64/hex and secure random for Ezy (wraps OpenSSL)",
+  "sources":      ["crypto.c"],
+  "header":       "crypto.ez",
+  "binary":       "libcrypto_ezy.so",
+  "dependencies": [],
+  "link_flags":   ["-l:libcrypto.so.3"]
+}

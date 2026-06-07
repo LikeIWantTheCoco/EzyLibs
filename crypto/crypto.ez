@@ -1,0 +1,24 @@
+# ── crypto: hashing, HMAC, base64/hex, random (wraps OpenSSL) ──
+# Digests return lowercase hex. base64/hex helpers work on text.
+
+# ── Digests ───────────────────────────────────────────
+extern fn md5(s: string) -> string
+extern fn sha1(s: string) -> string
+extern fn sha256(s: string) -> string
+extern fn sha512(s: string) -> string
+extern fn md5_file(path: string) -> string       # hash a whole file
+extern fn sha256_file(path: string) -> string
+
+# ── HMAC ──────────────────────────────────────────────
+extern fn hmac_sha256(key: string, msg: string) -> string
+extern fn hmac_sha1(key: string, msg: string) -> string
+
+# ── Encoding ──────────────────────────────────────────
+extern fn base64_encode(s: string) -> string
+extern fn base64_decode(s: string) -> string
+extern fn hex_encode(s: string) -> string
+extern fn hex_decode(s: string) -> string
+
+# ── Random ────────────────────────────────────────────
+extern fn random_hex(n: int) -> string            # n cryptographically-random bytes as hex
+extern fn random_int(max: int) -> int             # uniform-ish int in [0, max)

@@ -1,0 +1,15 @@
+# ── log: leveled, timestamped logging for Ezy ─────────────────
+# Levels: 0=debug 1=info 2=warn 3=error. Messages below the minimum
+# level (default info) are dropped. Output goes to stderr (colored) or
+# a file. Thread-safe.
+
+extern fn log_debug(msg: string) -> int
+extern fn log_info(msg: string) -> int
+extern fn log_warn(msg: string) -> int
+extern fn log_error(msg: string) -> int
+
+extern fn log_set_level(level: int) -> int      # 0=debug 1=info 2=warn 3=error
+extern fn log_get_level() -> int
+extern fn log_to_file(path: string) -> int       # append log output to a file
+extern fn log_to_stderr() -> int                 # back to stderr
+extern fn log_set_colors(on: int) -> int         # ANSI colors on stderr (default on)

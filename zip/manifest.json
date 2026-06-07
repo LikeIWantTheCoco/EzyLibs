@@ -1,0 +1,11 @@
+{
+  "name":         "zip",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "Read and write .zip archives for Ezy (wraps libzip): create, add files/text, list, read, extract",
+  "sources":      ["zip.c"],
+  "header":       "zip.ez",
+  "binary":       "libzip_ezy.so",
+  "dependencies": [],
+  "link_flags":   ["-l:libzip.so.4"]
+}
