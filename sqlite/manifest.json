@@ -1,0 +1,11 @@
+{
+  "name":         "sqlite",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "SQLite databases for Ezy: open, exec, prepared statements, bind and query via opaque handles",
+  "sources":      ["sqlite.c"],
+  "header":       "sqlite.ez",
+  "binary":       "libsqlite.so",
+  "dependencies": [],
+  "link_flags":   ["-lsqlite3"]
+}

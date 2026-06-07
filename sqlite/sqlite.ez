@@ -1,0 +1,39 @@
+# ── sqlite: SQLite databases from Ezy (wraps libsqlite3) ──────
+# Connections and statements are opaque integer handles. 0 is the null
+# handle. Always finalize statements and close the connection.
+
+# ── Connection ────────────────────────────────────────
+extern fn sqlite_open(path: string) -> int      # open/create a db file -> handle
+extern fn sqlite_open_memory() -> int            # in-memory database
+extern fn sqlite_close(db: int) -> int
+extern fn sqlite_error(db: int) -> string          # last error message
+extern fn sqlite_changes(db: int) -> int           # rows affected by the last statement
+extern fn sqlite_last_insert_id(db: int) -> int    # rowid of the last INSERT
+
+# ── Direct execution (no result rows) ─────────────────
+extern fn sqlite_exec(db: int, sql: string) -> int  # CREATE/INSERT/UPDATE/DELETE (1 ok, 0 error)
+
+# ── Prepared statements ───────────────────────────────
+extern fn sqlite_prepare(db: int, sql: string) -> int  # compile -> stmt handle (0 on error)
+extern fn sqlite_step(stmt: int) -> int               # 1 if a row is ready, 0 when done
+extern fn sqlite_finalize(stmt: int) -> int
+extern fn sqlite_reset(stmt: int) -> int              # rewind to re-execute
+
+# ── Parameter binding (1-indexed) ─────────────────────
+extern fn sqlite_bind_int(stmt: int, idx: int, val: int) -> int
+extern fn sqlite_bind_float(stmt: int, idx: int, val: float) -> int
+extern fn sqlite_bind_string(stmt: int, idx: int, val: string) -> int
+extern fn sqlite_bind_null(stmt: int, idx: int) -> int
+
+# ── Column access (0-indexed) ─────────────────────────
+extern fn sqlite_column_count(stmt: int) -> int
+extern fn sqlite_column_int(stmt: int, col: int) -> int
+extern fn sqlite_column_float(stmt: int, col: int) -> float
+extern fn sqlite_column_string(stmt: int, col: int) -> string
+extern fn sqlite_column_name(stmt: int, col: int) -> string
+extern fn sqlite_column_type(stmt: int, col: int) -> string  # integer|float|text|blob|null
+
+# ── Convenience ───────────────────────────────────────
+extern fn sqlite_query_int(db: int, sql: string) -> int      # first column of first row (e.g. COUNT)
+extern fn sqlite_query_string(db: int, sql: string) -> string
+extern fn sqlite_version() -> string
