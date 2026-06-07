@@ -1,89 +1,89 @@
 # ── Trig ──────────────────────────────────────────────
-extern fn math_sin(x: float) - float;
-extern fn math_cos(x: float) - float;
-extern fn math_tan(x: float) - float;
-extern fn math_asin(x: float) - float;
-extern fn math_acos(x: float) - float;
-extern fn math_atan(x: float) - float;
-extern fn math_atan2(y: float, x: float) - float;
-extern fn math_sinh(x: float) - float;
-extern fn math_cosh(x: float) - float;
-extern fn math_tanh(x: float) - float;
-extern fn math_asinh(x: float) - float;
-extern fn math_acosh(x: float) - float;
-extern fn math_atanh(x: float) - float;
+extern fn math_sin(x: float) -> float
+extern fn math_cos(x: float) -> float
+extern fn math_tan(x: float) -> float
+extern fn math_asin(x: float) -> float
+extern fn math_acos(x: float) -> float
+extern fn math_atan(x: float) -> float
+extern fn math_atan2(y: float, x: float) -> float
+extern fn math_sinh(x: float) -> float
+extern fn math_cosh(x: float) -> float
+extern fn math_tanh(x: float) -> float
+extern fn math_asinh(x: float) -> float
+extern fn math_acosh(x: float) -> float
+extern fn math_atanh(x: float) -> float
 
 # ── Exponential / logarithmic ─────────────────────────
-extern fn math_exp(x: float) - float;
-extern fn math_exp2(x: float) - float;
-extern fn math_expm1(x: float) - float;
-extern fn math_log(x: float) - float;
-extern fn math_log2(x: float) - float;
-extern fn math_log10(x: float) - float;
-extern fn math_log1p(x: float) - float;
-extern fn math_pow(base: float, exp: float) - float;
-extern fn math_sqrt(x: float) - float;
-extern fn math_cbrt(x: float) - float;
-extern fn math_hypot(a: float, b: float) - float;
+extern fn math_exp(x: float) -> float
+extern fn math_exp2(x: float) -> float
+extern fn math_expm1(x: float) -> float
+extern fn math_log(x: float) -> float
+extern fn math_log2(x: float) -> float
+extern fn math_log10(x: float) -> float
+extern fn math_log1p(x: float) -> float
+extern fn math_pow(base: float, exp: float) -> float
+extern fn math_sqrt(x: float) -> float
+extern fn math_cbrt(x: float) -> float
+extern fn math_hypot(a: float, b: float) -> float
 
 # ── Rounding ───────────────────────────────────────────
-extern fn math_floor(x: float) - float;
-extern fn math_ceil(x: float) - float;
-extern fn math_round(x: float) - float;
-extern fn math_trunc(x: float) - float;
-extern fn math_lround(x: float) - int;
+extern fn math_floor(x: float) -> float
+extern fn math_ceil(x: float) -> float
+extern fn math_round(x: float) -> float
+extern fn math_trunc(x: float) -> float
+extern fn math_lround(x: float) -> int
 
 # ── Absolute value / sign ─────────────────────────────
-extern fn math_abs(x: float) - float;
-extern fn math_iabs(x: int) - int;
-extern fn math_sign(x: float) - int;
-extern fn math_isign(x: int) - int;
+extern fn math_abs(x: float) -> float
+extern fn math_iabs(x: int) -> int
+extern fn math_sign(x: float) -> int
+extern fn math_isign(x: int) -> int
 
 # ── Clamp / min / max ─────────────────────────────────
-extern fn math_clamp(x: float, lo: float, hi: float) - float;
-extern fn math_iclamp(x: int, lo: int, hi: int) - int;
-extern fn math_fmax(a: float, b: float) - float;
-extern fn math_fmin(a: float, b: float) - float;
-extern fn math_imax(a: int, b: int) - int;
-extern fn math_imin(a: int, b: int) - int;
+extern fn math_clamp(x: float, lo: float, hi: float) -> float
+extern fn math_iclamp(x: int, lo: int, hi: int) -> int
+extern fn math_fmax(a: float, b: float) -> float
+extern fn math_fmin(a: float, b: float) -> float
+extern fn math_imax(a: int, b: int) -> int
+extern fn math_imin(a: int, b: int) -> int
 
 # ── Modulo / remainder ────────────────────────────────
-extern fn math_fmod(a: float, b: float) - float;
-extern fn math_remainder(a: float, b: float) - float;
+extern fn math_fmod(a: float, b: float) -> float
+extern fn math_remainder(a: float, b: float) -> float
 
 # ── Power helpers ─────────────────────────────────────
-extern fn math_sq(x: float) - float;
-extern fn math_cube(x: float) - float;
+extern fn math_sq(x: float) -> float
+extern fn math_cube(x: float) -> float
 
 # ── Angle conversion ──────────────────────────────────
-extern fn math_deg2rad(d: float) - float;
-extern fn math_rad2deg(r: float) - float;
+extern fn math_deg2rad(d: float) -> float
+extern fn math_rad2deg(r: float) -> float
 
 # ── Constants ─────────────────────────────────────────
-extern fn math_pi() - float;
-extern fn math_e() - float;
-extern fn math_tau() - float;
-extern fn math_phi() - float;
-extern fn math_inf() - float;
-extern fn math_nan() - float;
+extern fn math_pi() -> float
+extern fn math_e() -> float
+extern fn math_tau() -> float
+extern fn math_phi() -> float
+extern fn math_inf() -> float
+extern fn math_nan() -> float
 
 # ── Classification ────────────────────────────────────
-extern fn math_isinf(x: float) - int;
-extern fn math_isnan(x: float) - int;
-extern fn math_isfinite(x: float) - int;
+extern fn math_isinf(x: float) -> int
+extern fn math_isnan(x: float) -> int
+extern fn math_isfinite(x: float) -> int
 
 # ── Interpolation ─────────────────────────────────────
-extern fn math_lerp(a: float, b: float, t: float) - float;
-extern fn math_smoothstep(edge0: float, edge1: float, x: float) - float;
+extern fn math_lerp(a: float, b: float, t: float) -> float
+extern fn math_smoothstep(edge0: float, edge1: float, x: float) -> float
 
 # ── Integer math ──────────────────────────────────────
-extern fn math_gcd(a: int, b: int) - int;
-extern fn math_lcm(a: int, b: int) - int;
-extern fn math_factorial(n: int) - int;
-extern fn math_isprime(n: int) - int;
-extern fn math_pow2(n: int) - int;
-extern fn math_log2i(n: int) - int;
-extern fn math_nextpow2(n: int) - int;
+extern fn math_gcd(a: int, b: int) -> int
+extern fn math_lcm(a: int, b: int) -> int
+extern fn math_factorial(n: int) -> int
+extern fn math_isprime(n: int) -> int
+extern fn math_pow2(n: int) -> int
+extern fn math_log2i(n: int) -> int
+extern fn math_nextpow2(n: int) -> int
 
 # ── Statistics helpers ────────────────────────────────
-extern fn math_map(x: float, in_lo: float, in_hi: float, out_lo: float, out_hi: float) - float;
+extern fn math_map(x: float, in_lo: float, in_hi: float, out_lo: float, out_hi: float) -> float
