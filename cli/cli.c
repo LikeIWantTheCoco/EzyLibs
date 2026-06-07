@@ -138,13 +138,15 @@ static void blank_at(int row, int col, const char *val) {
    Core API
    ═══════════════════════════════════════════════════════════════ */
 
-/* declare a CLI variable and return its name (use it as a handle):
-       Example = cli_var("Example")
-       cli_set(Example, "Hola")
-       cli_print(Example)                                                  */
-char *cli_var(const char *name) {
+/* declare a CLI variable with an initial value and return its name
+   (use it as a handle):
+       Example = cli_var("Example", "Hola")
+       cli_print(Example)
+       cli_set(Example, "Adios")                                           */
+char *cli_var(const char *name, const char *value) {
     if (!name) return strdup("");
-    get_or_new(name);
+    CliVar *v = get_or_new(name);
+    if (v && value) { free(v->value); v->value = strdup(value); v->lines = count_lines(v->value); }
     return strdup(name);
 }
 

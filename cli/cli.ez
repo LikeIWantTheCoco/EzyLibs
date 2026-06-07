@@ -10,13 +10,13 @@
 #   cli_set("Greeting", "Adios")    # the on-screen "Hola" becomes "Adios"
 
 # ── Reactive variables ────────────────────────────────
-# Declare a variable once; cli_var returns its name, so you keep an Ezy
-# handle and pass it around (no string literals everywhere):
-#     Example = cli_var("Example")
-#     cli_set(Example, "Hola")
+# Declare a variable (optionally with its initial value); cli_var returns
+# its name, so you keep an Ezy handle and pass it around:
+#     Example = cli_var("Example", "Hola")   # declare + set content
 #     cli_print(Example)
-#     cli_set(Example, "Adios")     # the on-screen text updates in place
-extern fn cli_var(name: string) -> string               # declare -> returns the handle
+#     cli_set(Example, "Adios")              # updates in place
+# The value is optional:  Example = cli_var("Example")
+extern fn cli_var(name: string, value: string = "") -> string
 extern fn cli_set(name: string, value: string) -> int   # set/update (redraws if shown)
 extern fn cli_get(name: string) -> string
 extern fn cli_print(name: string) -> int                 # draw at cursor, remember position
