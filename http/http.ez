@@ -1,0 +1,27 @@
+# ── http: HTTP/HTTPS client for Ezy (wraps libcurl) ───────────
+# Responses and requests are opaque integer handles. Free responses
+# with http_free. Needs the libcurl runtime (libcurl.so.4).
+
+# ── Convenience ───────────────────────────────────────
+extern fn http_get(url: string) -> int             # GET  -> response handle
+extern fn http_post(url: string, body: string) -> int   # POST -> response handle
+extern fn http_put(url: string, body: string) -> int
+extern fn http_delete(url: string) -> int
+extern fn http_fetch(url: string) -> string          # GET, returns the body directly
+
+# ── Response inspection ───────────────────────────────
+extern fn http_status(resp: int) -> int              # HTTP status code (0 on transport error)
+extern fn http_ok(resp: int) -> int                  # 1 if status is 2xx
+extern fn http_body(resp: int) -> string             # response body
+extern fn http_header(resp: int, name: string) -> string  # a response header (case-insensitive)
+extern fn http_free(resp: int) -> int
+
+# ── Builder (custom method, headers, body, timeout) ───
+extern fn http_request(method: string, url: string) -> int   # build a request -> handle
+extern fn http_set_header(req: int, name: string, value: string) -> int
+extern fn http_set_body(req: int, body: string) -> int
+extern fn http_set_timeout(req: int, seconds: int) -> int
+extern fn http_send(req: int) -> int                 # perform -> response handle (frees the request)
+extern fn http_request_free(req: int) -> int         # discard a request without sending
+
+extern fn http_version() -> string

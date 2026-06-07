@@ -1,0 +1,11 @@
+{
+  "name":         "http",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "HTTP/HTTPS client for Ezy (wraps libcurl): get/post/put/delete, headers, custom requests",
+  "sources":      ["http.c"],
+  "header":       "http.ez",
+  "binary":       "libhttp.so",
+  "dependencies": [],
+  "link_flags":   ["-l:libcurl.so.4"]
+}
