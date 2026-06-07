@@ -10,6 +10,13 @@
 #   cli_set("Greeting", "Adios")    # the on-screen "Hola" becomes "Adios"
 
 # ── Reactive variables ────────────────────────────────
+# Declare a variable once; cli_var returns its name, so you keep an Ezy
+# handle and pass it around (no string literals everywhere):
+#     Example = cli_var("Example")
+#     cli_set(Example, "Hola")
+#     cli_print(Example)
+#     cli_set(Example, "Adios")     # the on-screen text updates in place
+extern fn cli_var(name: string) -> string               # declare -> returns the handle
 extern fn cli_set(name: string, value: string) -> int   # set/update (redraws if shown)
 extern fn cli_get(name: string) -> string
 extern fn cli_print(name: string) -> int                 # draw at cursor, remember position
@@ -32,7 +39,8 @@ extern fn cli_box(text: string) -> string                   # draw a box → mul
 
 # ── Templates ─────────────────────────────────────────
 # picker: options is a newline-separated list; dir is "vertical" or "horizontal"
-extern fn cli_picker(name: string, dir: string, options: string) -> int
+# returns the picker's handle:  Menu = cli_picker("Menu", "vertical", "A\nB\nC")
+extern fn cli_picker(name: string, dir: string, options: string) -> string
 extern fn cli_picker_up(name: string) -> int        # move selection up   (returns new index)
 extern fn cli_picker_down(name: string) -> int      # move selection down
 extern fn cli_picker_select(name: string, i: int) -> int

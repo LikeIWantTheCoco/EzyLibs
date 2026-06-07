@@ -137,6 +137,16 @@ static void blank_at(int row, int col, const char *val) {
    Core API
    ═══════════════════════════════════════════════════════════════ */
 
+/* declare a CLI variable and return its name (use it as a handle):
+       Example = cli_var("Example")
+       cli_set(Example, "Hola")
+       cli_print(Example)                                                  */
+char *cli_var(const char *name) {
+    if (!name) return strdup("");
+    get_or_new(name);
+    return strdup(name);
+}
+
 /* set / update a CLI variable; redraws in place if already shown */
 long long cli_set(const char *name, const char *value) {
     CliVar *v = get_or_new(name);
@@ -293,10 +303,11 @@ static void picker_render(CliVar *v) {
     free(buf);
 }
 
-/* create a picker. `options` is a newline-separated list. dir: "vertical"/"horizontal" */
-long long cli_picker(const char *name, const char *dir, const char *options) {
+/* create a picker (returns its name as a handle).
+   `options` is a newline-separated list. dir: "vertical"/"horizontal" */
+char *cli_picker(const char *name, const char *dir, const char *options) {
     CliVar *v = get_or_new(name);
-    if (!v) return 0;
+    if (!v) return strdup(name ? name : "");
     for (int i = 0; i < v->nopts; i++) free(v->opts[i]);
     v->nopts = 0; v->sel = 0; v->is_picker = 1;
     v->vertical = (dir && strcmp(dir, "horizontal") == 0) ? 0 : 1;
@@ -310,7 +321,7 @@ long long cli_picker(const char *name, const char *dir, const char *options) {
         p = nl + 1;
     }
     picker_render(v);
-    return 1;
+    return strdup(name);
 }
 long long cli_picker_down(const char *name) {
     CliVar *v = find(name);
