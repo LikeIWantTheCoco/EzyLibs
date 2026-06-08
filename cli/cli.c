@@ -220,6 +220,37 @@ long long cli_print(const char *name) {
     return 1;
 }
 
+/* like cli_print but NO trailing newline — cursor stays at end of value.
+   use this to place multiple variables on the same line; follow with
+   cli_newline() to end the line after the last inline variable.
+   note: if a variable's visual width changes after cli_set, adjacent
+         variables on the same line may shift — use cli_ljust/rjust to
+         keep widths stable. */
+long long cli_print_inline(const char *name) {
+    CliVar *v = get_or_new(name);
+    if (!v) return 0;
+    v->shown = 1; v->hidden = 0;
+    v->lines = 1;
+    if (is_tty()) {
+        int sr, sc;
+        /* query BEFORE print so we capture this variable's start column */
+        if (query_cursor(&sr, &sc)) {
+            v->positioned = 1;
+            v->row = sr;
+            v->col = sc;
+        } else {
+            v->positioned = 0;
+        }
+        printf("%s", v->value);
+        fflush(stdout);
+    } else {
+        v->positioned = 0;
+        printf("%s", v->value);
+        fflush(stdout);
+    }
+    return 1;
+}
+
 /* hide: blank the region with spaces (layout preserved) */
 long long cli_hide(const char *name) {
     CliVar *v = find(name);

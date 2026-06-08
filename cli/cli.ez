@@ -24,6 +24,7 @@ extern fn cli_text(text: string) -> int                  # print a literal line
 extern fn cli_newline() -> int                           # a blank line
 extern fn cli_get(name: string) -> string
 extern fn cli_print(name: string) -> int                 # draw at cursor, remember position
+extern fn cli_print_inline(name: string) -> int          # draw without newline — next inline var on same line
 extern fn cli_hide(name: string) -> int                  # blank the region (keeps layout)
 extern fn cli_show(name: string) -> int                  # show again after hide
 extern fn cli_replace(name: string, other: string) -> int  # show other's value in name's region
