@@ -33,6 +33,8 @@ extern fn cli_remove(name: string) -> int                # clear region and forg
 extern fn cli_clear() -> int
 extern fn cli_cursor_hide() -> int
 extern fn cli_cursor_show() -> int
+extern fn cli_cursor_up(n: int) -> int    # move cursor up n lines (relative)
+extern fn cli_cursor_down(n: int) -> int  # move cursor down n lines (relative)
 extern fn cli_move(row: int, col: int) -> int
 
 # ── Styling (return styled strings to use as values) ──

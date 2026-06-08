@@ -260,6 +260,8 @@ long long cli_remove(const char *name) {
 long long cli_clear(void)       { if (is_tty()) { fputs("\033[2J\033[H", stdout); fflush(stdout);} return 0; }
 long long cli_cursor_hide(void) { if (is_tty()) { fputs("\033[?25l", stdout); fflush(stdout);} return 0; }
 long long cli_cursor_show(void) { if (is_tty()) { fputs("\033[?25h", stdout); fflush(stdout);} return 0; }
+long long cli_cursor_up(long long n)   { if (is_tty() && n > 0) { printf("\033[%lldA", n); fflush(stdout); } return 0; }
+long long cli_cursor_down(long long n) { if (is_tty() && n > 0) { printf("\033[%lldB", n); fflush(stdout); } return 0; }
 long long cli_move(long long row, long long col) {
     if (is_tty()) { printf("\033[%lld;%lldH", row, col); fflush(stdout); }
     return 0;
