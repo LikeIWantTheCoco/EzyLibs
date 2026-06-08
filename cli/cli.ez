@@ -39,7 +39,10 @@ extern fn cli_move(row: int, col: int) -> int
 extern fn cli_color(text: string, color: string) -> string  # red green yellow blue magenta cyan white grey
 extern fn cli_bold(text: string) -> string
 extern fn cli_dim(text: string) -> string
-extern fn cli_make_box(content: string, frame_color: string) -> string  # wrap pre-styled content in a colored frame
+extern fn cli_make_box(content: string, frame_color: string, chars: string) -> string
+# wrap pre-styled content in a colored frame with custom box chars.
+# chars: 5 glyphs "tl h tr bl br"  or  6 glyphs "tl h tr v bl br"
+# pass "" for default "┌─┐│└┘".  example: cli_make_box(title, "blue", "╔═╗║╚╝")
 
 # ── Templates ─────────────────────────────────────────
 # picker: options is a newline-separated list; dir is "vertical" or "horizontal"

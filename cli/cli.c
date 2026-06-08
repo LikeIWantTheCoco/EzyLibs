@@ -294,8 +294,7 @@ char *cli_dim(const char *text) {
     snprintf(o, n, "\033[2m%s\033[0m", text); return o;
 }
 
-/* visual width of a string: strips ANSI escape sequences and counts
-   UTF-8 lead bytes only (continuation bytes 0x80–0xBF are skipped) */
+/* visual width: strips ANSI escapes, counts UTF-8 lead bytes only */
 static int visual_len(const char *s) {
     int n = 0;
     while (*s) {
@@ -311,23 +310,67 @@ static int visual_len(const char *s) {
     return n;
 }
 
+/* byte length of the next UTF-8 codepoint */
+static int utf8_seq(unsigned char c) {
+    if (c < 0x80) return 1;
+    if (c < 0xE0) return 2;
+    if (c < 0xF0) return 3;
+    return 4;
+}
+
+/* extract up to `max` UTF-8 codepoints from s into out[] (malloc'd, null-terminated).
+   Returns count extracted. */
+static int parse_box_chars(const char *s, char **out, int max) {
+    int n = 0;
+    while (s && *s && n < max) {
+        int len = utf8_seq((unsigned char)*s);
+        char *ch = malloc(len + 1);
+        memcpy(ch, s, len); ch[len] = '\0';
+        out[n++] = ch;
+        s += len;
+    }
+    return n;
+}
+
 /* wrap pre-styled content in a unicode box whose frame uses frame_color.
-   content can already carry its own ANSI styling (cli_color, cli_bold, …);
-   visual width is measured correctly so the border aligns.
-       cli_make_box(cli_color("Hello", "white"), "blue") */
-char *cli_make_box(const char *content, const char *frame_color) {
+   chars selects the box-drawing characters as a UTF-8 string of 5 or 6 glyphs:
+     5 glyphs → tl h tr bl br     (side defaults to │)
+     6 glyphs → tl h tr v  bl br
+   Pass NULL or "" to use the default "┌─┐│└┘".
+       cli_make_box(cli_color("Hi", "white"), "blue", "┌─┐└┘")
+       cli_make_box(cli_color("Hi", "white"), "blue", "╔═╗║╚╝") */
+char *cli_make_box(const char *content, const char *frame_color, const char *chars) {
     if (!content) content = "";
+    if (!chars || !*chars) chars = "┌─┐│└┘";
     const char *fc = color_code(frame_color);
+
+    char *ch[6] = {NULL};
+    int nc = parse_box_chars(chars, ch, 6);
+
+    const char *tl = nc > 0 ? ch[0] : "┌";
+    const char *h  = nc > 1 ? ch[1] : "─";
+    const char *tr = nc > 2 ? ch[2] : "┐";
+    const char *v, *bl, *br;
+    if (nc >= 6) { v = ch[3]; bl = ch[4]; br = ch[5]; }
+    else if (nc == 5) { v = "│"; bl = ch[3]; br = ch[4]; }
+    else { v = "│"; bl = "└"; br = "┘"; }
+
     int w = visual_len(content);
-    size_t cap = (size_t)(w + 4) * 4 + strlen(content) + 256;
+    int hlen = (int)strlen(h);
+    size_t cap = (size_t)(w + 4) * (hlen + 4) * 2 + strlen(content) + 256;
     char *o = malloc(cap); char *p = o;
-    p += sprintf(p, "\033[%sm┌", fc);
-    for (int i = 0; i < w + 2; i++) p += sprintf(p, "─");
-    p += sprintf(p, "┐\033[0m\n");
-    p += sprintf(p, "\033[%sm│\033[0m %s \033[%sm│\033[0m\n", fc, content, fc);
-    p += sprintf(p, "\033[%sm└", fc);
-    for (int i = 0; i < w + 2; i++) p += sprintf(p, "─");
-    p += sprintf(p, "┘\033[0m");
+
+    p += sprintf(p, "\033[%sm%s", fc, tl);
+    for (int i = 0; i < w + 2; i++) p += sprintf(p, "%s", h);
+    p += sprintf(p, "%s\033[0m\n", tr);
+
+    p += sprintf(p, "\033[%sm%s\033[0m %s \033[%sm%s\033[0m\n", fc, v, content, fc, v);
+
+    p += sprintf(p, "\033[%sm%s", fc, bl);
+    for (int i = 0; i < w + 2; i++) p += sprintf(p, "%s", h);
+    p += sprintf(p, "%s\033[0m", br);
+
+    for (int i = 0; i < nc; i++) free(ch[i]);
     return o;
 }
 
