@@ -294,37 +294,37 @@ char *cli_dim(const char *text) {
     snprintf(o, n, "\033[2m%s\033[0m", text); return o;
 }
 
-/* a unicode box around (single-line) text → multi-line string */
-char *cli_box(const char *text) {
-    if (!text) text = "";
-    int w = (int)strlen(text);
-    /* top + sides + bottom; box-drawing chars are 3 bytes each in UTF-8 */
-    size_t cap = (size_t)(w + 8) * 4 + 64;
-    char *o = malloc(cap); char *p = o;
-    p += sprintf(p, "┌");
-    for (int i = 0; i < w + 2; i++) p += sprintf(p, "─");
-    p += sprintf(p, "┐\n│ %s │\n└", text);
-    for (int i = 0; i < w + 2; i++) p += sprintf(p, "─");
-    p += sprintf(p, "┘");
-    return o;
+/* visual width of a string: strips ANSI escape sequences and counts
+   UTF-8 lead bytes only (continuation bytes 0x80–0xBF are skipped) */
+static int visual_len(const char *s) {
+    int n = 0;
+    while (*s) {
+        if (*s == '\033' && *(s+1) == '[') {
+            s += 2;
+            while (*s && *s != 'm') s++;
+            if (*s) s++;
+            continue;
+        }
+        unsigned char c = (unsigned char)*s++;
+        if (c < 0x80 || c >= 0xC0) n++;
+    }
+    return n;
 }
 
-/* like cli_box but frame and text use separate colors.
-   frame_color colors the border chars; text_color colors the inner text. */
-char *cli_box_color(const char *text, const char *frame_color, const char *text_color) {
-    if (!text) text = "";
+/* wrap pre-styled content in a unicode box whose frame uses frame_color.
+   content can already carry its own ANSI styling (cli_color, cli_bold, …);
+   visual width is measured correctly so the border aligns.
+       cli_make_box(cli_color("Hello", "white"), "blue") */
+char *cli_make_box(const char *content, const char *frame_color) {
+    if (!content) content = "";
     const char *fc = color_code(frame_color);
-    const char *tc = color_code(text_color);
-    int w = (int)strlen(text);
-    size_t cap = (size_t)w * 8 + 256;
+    int w = visual_len(content);
+    size_t cap = (size_t)(w + 4) * 4 + strlen(content) + 256;
     char *o = malloc(cap); char *p = o;
-    /* top border */
     p += sprintf(p, "\033[%sm┌", fc);
     for (int i = 0; i < w + 2; i++) p += sprintf(p, "─");
     p += sprintf(p, "┐\033[0m\n");
-    /* middle: colored border, colored text */
-    p += sprintf(p, "\033[%sm│\033[0m \033[%sm%s\033[0m \033[%sm│\033[0m\n", fc, tc, text, fc);
-    /* bottom border */
+    p += sprintf(p, "\033[%sm│\033[0m %s \033[%sm│\033[0m\n", fc, content, fc);
     p += sprintf(p, "\033[%sm└", fc);
     for (int i = 0; i < w + 2; i++) p += sprintf(p, "─");
     p += sprintf(p, "┘\033[0m");

@@ -39,8 +39,7 @@ extern fn cli_move(row: int, col: int) -> int
 extern fn cli_color(text: string, color: string) -> string  # red green yellow blue magenta cyan white grey
 extern fn cli_bold(text: string) -> string
 extern fn cli_dim(text: string) -> string
-extern fn cli_box(text: string) -> string                   # draw a box → multi-line string
-extern fn cli_box_color(text: string, frame_color: string, text_color: string) -> string  # box with separate frame/text colors
+extern fn cli_make_box(content: string, frame_color: string) -> string  # wrap pre-styled content in a colored frame
 
 # ── Templates ─────────────────────────────────────────
 # picker: options is a newline-separated list; dir is "vertical" or "horizontal"
