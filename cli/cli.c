@@ -507,6 +507,79 @@ char *cli_rjust(const char *text, long long width) {
    UI components
    ═══════════════════════════════════════════════════════════════ */
 
+/* full-width section header: divider / bold title / divider (multi-line string) */
+char *cli_section(const char *title, const char *color) {
+    if (!title) title = "";
+    long long w = cli_term_width();
+    const char *cc = color_code(color && *color ? color : "white");
+    size_t cap = (size_t)w * 6 + strlen(title) + 128;
+    char *o = malloc(cap); char *p = o;
+    p += sprintf(p, "\033[%sm", cc);
+    for (int i = 0; i < (int)w; i++) { memcpy(p, "─", 3); p += 3; }
+    p += sprintf(p, "\033[0m\n\033[1;%sm  %s\033[0m\n\033[%sm", cc, title, cc);
+    for (int i = 0; i < (int)w; i++) { memcpy(p, "─", 3); p += 3; }
+    p += sprintf(p, "\033[0m");
+    return o;
+}
+
+/* centered title with ─── on both sides (single-line string) */
+char *cli_title(const char *text, const char *color) {
+    if (!text) text = "";
+    long long w = cli_term_width();
+    const char *cc = color_code(color && *color ? color : "white");
+    int vlen = visual_len(text);
+    int sides = ((int)w - vlen - 2) / 2;
+    if (sides < 1) sides = 1;
+    int rside = (int)w - sides - vlen - 2;
+    if (rside < 1) rside = 1;
+    size_t cap = (size_t)(sides + rside) * 3 + strlen(text) + 64;
+    char *o = malloc(cap); char *p = o;
+    p += sprintf(p, "\033[%sm", cc);
+    for (int i = 0; i < sides; i++) { memcpy(p, "─", 3); p += 3; }
+    p += sprintf(p, " %s ", text);
+    for (int i = 0; i < rside; i++) { memcpy(p, "─", 3); p += 3; }
+    p += sprintf(p, "\033[0m");
+    return o;
+}
+
+/* colored alert with icon: type = "info" | "warn" | "error" | "success" */
+char *cli_alert(const char *text, const char *type) {
+    if (!text) text = "";
+    if (!type || !*type) type = "info";
+    const char *color, *icon;
+    if      (!strcmp(type,"error"))   { color="31"; icon="✗"; }
+    else if (!strcmp(type,"warn"))    { color="33"; icon="⚠"; }
+    else if (!strcmp(type,"success")) { color="32"; icon="✓"; }
+    else                              { color="36"; icon="ℹ"; }
+    size_t cap = strlen(text) + 64;
+    char *o = malloc(cap);
+    snprintf(o, cap, "\033[%sm%s  %s\033[0m", color, icon, text);
+    return o;
+}
+
+/* simple inline prompt + readline — no box, just prints prompt and reads */
+char *cli_ask(const char *prompt) {
+    if (!prompt) prompt = "";
+    if (*prompt) { printf("%s", prompt); fflush(stdout); }
+    char buf[4096]; buf[0] = '\0';
+    if (fgets(buf, sizeof(buf), stdin)) {
+        int l = (int)strlen(buf);
+        if (l > 0 && buf[l-1] == '\n') buf[l-1] = '\0';
+    }
+    return strdup(buf);
+}
+
+/* y/n confirmation prompt — returns 1 for yes, 0 for no */
+long long cli_confirm(const char *question) {
+    if (!question) question = "";
+    printf("%s [y/N] ", question);
+    fflush(stdout);
+    char buf[16]; buf[0] = '\0';
+    if (fgets(buf, sizeof(buf), stdin))
+        return (buf[0] == 'y' || buf[0] == 'Y') ? 1 : 0;
+    return 0;
+}
+
 /* colored ✓ / ✗ status indicator */
 char *cli_status(const char *label, long long ok) {
     if (!label) label = "";

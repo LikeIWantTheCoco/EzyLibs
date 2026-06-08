@@ -1,81 +1,123 @@
-# ── cli: reactive terminal UI for Ezy ─────────────────────────
-# CLI variables are named string values pinned to a screen position.
-# cli_print(name) draws a variable and remembers where; cli_set(name,
-# value) then redraws it in place — no reprint, no flicker. Templates
-# (picker, progress, spinner, box) render into a variable's value, so
-# updating them re-renders automatically.
+# ════════════════════════════════════════════════════════════════
+#  cli  —  reactive terminal UI for Ezy
+#  import cli
+# ════════════════════════════════════════════════════════════════
 #
-#   cli_set("Greeting", "Hola")     # not shown yet
-#   cli_print("Greeting")           # shows "Hola"
-#   cli_set("Greeting", "Adios")    # the on-screen "Hola" becomes "Adios"
+#  REACTIVE VARIABLES  (named values pinned to a screen position)
+#  ┌─────────────────────────────────────────────────────────────┐
+#  │  Name = cli_var("Name", "hello")   # declare + set value   │
+#  │  cli_print(Name)                   # draw at cursor         │
+#  │  cli_set(Name, "world")            # redraw in place        │
+#  └─────────────────────────────────────────────────────────────┘
+#
+#  SAME-LINE LAYOUT
+#  ┌─────────────────────────────────────────────────────────────┐
+#  │  cli_print_inline(A)               # no \n, cursor stays   │
+#  │  cli_print_inline(B)               # anchors right of A    │
+#  │  cli_newline()                     # end the line          │
+#  │  cli_set(A, "new")                 # A updates in place    │
+#  └─────────────────────────────────────────────────────────────┘
+#
+#  QUICK REFERENCE
+#   Styling    cli_color  cli_bold  cli_dim
+#   Layout     cli_divider  cli_center  cli_ljust  cli_rjust
+#   Box        cli_make_box(content, frame_color, chars, padding)
+#   UI         cli_section  cli_title  cli_alert  cli_status  cli_badge
+#   Input      cli_ask  cli_confirm  cli_inputbox
+#   Widgets    cli_progress  cli_spinner  cli_picker
 
-# ── Reactive variables ────────────────────────────────
-# Declare a variable (optionally with its initial value); cli_var returns
-# its name, so you keep an Ezy handle and pass it around:
-#     Example = cli_var("Example", "Hola")   # declare + set content
-#     cli_print(Example)
-#     cli_set(Example, "Adios")              # updates in place
-# The value is optional:  Example = cli_var("Example")
+# ── Reactive variables ───────────────────────────────────────────
 extern fn cli_var(name: string, value: string = "") -> string
-extern fn cli_set(name: string, value: string) -> int   # set/update (redraws if shown)
-# Plain (non-reactive) output — for static lines/spacing. Do NOT use
-# cli_print for literal text: cli_print expects a variable NAME.
-extern fn cli_text(text: string) -> int                  # print a literal line
-extern fn cli_newline() -> int                           # a blank line
+extern fn cli_set(name: string, value: string) -> int
 extern fn cli_get(name: string) -> string
-extern fn cli_print(name: string) -> int                 # draw at cursor, remember position
-extern fn cli_print_inline(name: string) -> int          # draw without newline — next inline var on same line
-extern fn cli_hide(name: string) -> int                  # blank the region (keeps layout)
-extern fn cli_show(name: string) -> int                  # show again after hide
-extern fn cli_replace(name: string, other: string) -> int  # show other's value in name's region
-extern fn cli_remove(name: string) -> int                # clear region and forget
+extern fn cli_print(name: string) -> int
+extern fn cli_print_inline(name: string) -> int   # no newline — next var on same line
+extern fn cli_text(text: string) -> int           # print a plain line (adds \n)
+extern fn cli_newline() -> int
+extern fn cli_hide(name: string) -> int
+extern fn cli_show(name: string) -> int
+extern fn cli_replace(name: string, other: string) -> int
+extern fn cli_remove(name: string) -> int
 
-# ── Screen / cursor ───────────────────────────────────
+# ── Screen / cursor ──────────────────────────────────────────────
 extern fn cli_clear() -> int
 extern fn cli_cursor_hide() -> int
 extern fn cli_cursor_show() -> int
-extern fn cli_cursor_up(n: int) -> int    # move cursor up n lines (relative)
-extern fn cli_cursor_down(n: int) -> int  # move cursor down n lines (relative)
+extern fn cli_cursor_up(n: int) -> int
+extern fn cli_cursor_down(n: int) -> int
 extern fn cli_move(row: int, col: int) -> int
+extern fn cli_term_width() -> int     # live terminal column count (fallback 80)
+extern fn cli_term_height() -> int    # live terminal row count    (fallback 24)
 
-# ── Terminal size ──────────────────────────────────────
-extern fn cli_term_width() -> int         # current terminal column count (fallback: 80)
-extern fn cli_term_height() -> int        # current terminal row count    (fallback: 24)
-
-# ── Styling (return styled strings to use as values) ──
-extern fn cli_color(text: string, color: string) -> string  # red green yellow blue magenta cyan white grey
+# ── Styling  (return styled strings) ────────────────────────────
+# colors: red  green  yellow  blue  magenta  cyan  white  grey
+extern fn cli_color(text: string, color: string) -> string
 extern fn cli_bold(text: string) -> string
 extern fn cli_dim(text: string) -> string
+
+# ── Layout helpers  (return strings) ────────────────────────────
+extern fn cli_divider(ch: string, n: int) -> string
+# repeat glyph n times  →  cli_divider("─", 40)
+
+extern fn cli_center(text: string, width: int) -> string
+extern fn cli_ljust(text: string, width: int) -> string
+extern fn cli_rjust(text: string, width: int) -> string
+# align text in width columns (pad with spaces)
+
+# ── Box  ─────────────────────────────────────────────────────────
+# chars: 5 glyphs "tl h tr bl br"  or  6 "tl h tr v bl br"
+#        ""  →  default "┌─┐│└┘"
+# padding: extra spaces/rows inside the frame (0 = tight)
 extern fn cli_make_box(content: string, frame_color: string, chars: string, padding: int) -> string
-# wrap pre-styled content in a colored frame with custom box chars and padding.
-# chars: 5 glyphs "tl h tr bl br"  or  6 glyphs "tl h tr v bl br". "" = default "┌─┐│└┘"
-# padding: spaces added left/right and blank rows added top/bottom inside the box
-# example: cli_make_box(cli_color("Hi","white"), "blue", "╔═╗║╚╝", 1)
+# example:
+#   title = cli_bold(cli_color("My App", "white"))
+#   cli_text(cli_make_box(title, "blue", "╔═╗║╚╝", 1))
 
-# ── Layout helpers (return strings) ───────────────────
-extern fn cli_divider(ch: string, n: int) -> string   # repeat glyph n times: cli_divider("─", 40)
-extern fn cli_center(text: string, width: int) -> string  # center in width columns
-extern fn cli_ljust(text: string, width: int) -> string   # left-align, pad right with spaces
-extern fn cli_rjust(text: string, width: int) -> string   # right-align, pad left with spaces
+# ── UI components  (return strings) ──────────────────────────────
+extern fn cli_section(title: string, color: string) -> string
+# full-width section header: ─── / bold title / ───
+# cli_text(cli_section("Setup", "cyan"))
 
-# ── UI components ──────────────────────────────────────
-extern fn cli_status(label: string, ok: int) -> string    # ✓/✗ colored status: cli_status("tests pass", 1)
-extern fn cli_badge(text: string, color: string) -> string # bold colored [badge]
+extern fn cli_title(text: string, color: string) -> string
+# centered title with ─── on each side (single line)
+# cli_text(cli_title("Results", "yellow"))
 
-# ── Input template ─────────────────────────────────────
-# draw top/bottom borders, position cursor in middle, read a line, return it.
-# width=0 → terminal width - 4.  frame_color="" → no color.
+extern fn cli_alert(text: string, kind: string) -> string
+# colored alert with icon.  type: "info" | "warn" | "error" | "success"
+# cli_text(cli_alert("file not found", "error"))
+
+extern fn cli_status(label: string, ok: int) -> string
+# ✓ label  (green) or  ✗ label  (red)
+# cli_text(cli_status("tests pass", 1))
+
+extern fn cli_badge(text: string, color: string) -> string
+# bold colored [badge]
+
+# ── Input ─────────────────────────────────────────────────────────
+extern fn cli_ask(prompt: string) -> string
+# simple inline prompt + readline  (no box)
+# name = cli_ask("Your name: ")
+
+extern fn cli_confirm(question: string) -> int
+# y/N prompt — returns 1 for yes, 0 for no
+# if cli_confirm("Continue?") == 1: { ... }
+
 extern fn cli_inputbox(prompt: string, width: int, frame_color: string) -> string
+# framed input: draws top/bottom borders, reads in the middle
+# width=0 → terminal width - 4.  frame_color="" → no color
+# answer = cli_inputbox("> ", 0, "blue")
 
-# ── Templates ─────────────────────────────────────────
-# picker: options is a newline-separated list; dir is "vertical" or "horizontal"
-# returns the picker's handle:  Menu = cli_picker("Menu", "vertical", "A\nB\nC")
+# ── Widgets  (stored in a cli_var, updated reactively) ───────────
+# picker: options = newline-separated list, dir = "vertical" | "horizontal"
 extern fn cli_picker(name: string, dir: string, options: string) -> string
-extern fn cli_picker_up(name: string) -> int        # move selection up   (returns new index)
-extern fn cli_picker_down(name: string) -> int      # move selection down
+extern fn cli_picker_up(name: string) -> int
+extern fn cli_picker_down(name: string) -> int
 extern fn cli_picker_select(name: string, i: int) -> int
-extern fn cli_picker_index(name: string) -> int     # selected index
-extern fn cli_picker_value(name: string) -> string  # selected option text
+extern fn cli_picker_index(name: string) -> int
+extern fn cli_picker_value(name: string) -> string
 
-extern fn cli_progress(name: string, percent: int, width: int) -> int  # progress bar
-extern fn cli_spinner(name: string) -> int           # advance a spinner one frame
+extern fn cli_progress(name: string, percent: int, width: int) -> int
+# cli_progress("Bar", 75, 40)  then  cli_print("Bar")
+
+extern fn cli_spinner(name: string) -> int
+# call repeatedly in a loop to advance one frame
