@@ -333,15 +333,14 @@ static int parse_box_chars(const char *s, char **out, int max) {
 }
 
 /* wrap pre-styled content in a unicode box whose frame uses frame_color.
-   chars selects the box-drawing characters as a UTF-8 string of 5 or 6 glyphs:
-     5 glyphs → tl h tr bl br     (side defaults to │)
-     6 glyphs → tl h tr v  bl br
-   Pass NULL or "" to use the default "┌─┐│└┘".
-       cli_make_box(cli_color("Hi", "white"), "blue", "┌─┐└┘")
-       cli_make_box(cli_color("Hi", "white"), "blue", "╔═╗║╚╝") */
-char *cli_make_box(const char *content, const char *frame_color, const char *chars) {
+   chars: UTF-8 string of 5 glyphs (tl h tr bl br, side=│) or 6 (tl h tr v bl br).
+   padding: spaces added on each side of content horizontally, and blank rows
+            added above/below content vertically.
+       cli_make_box(cli_color("Hi","white"), "blue", "╔═╗║╚╝", 1) */
+char *cli_make_box(const char *content, const char *frame_color, const char *chars, long long padding) {
     if (!content) content = "";
     if (!chars || !*chars) chars = "┌─┐│└┘";
+    if (padding < 0) padding = 0;
     const char *fc = color_code(frame_color);
 
     char *ch[6] = {NULL};
@@ -355,19 +354,37 @@ char *cli_make_box(const char *content, const char *frame_color, const char *cha
     else if (nc == 5) { v = "│"; bl = ch[3]; br = ch[4]; }
     else { v = "│"; bl = "└"; br = "┘"; }
 
-    int w = visual_len(content);
-    int hlen = (int)strlen(h);
-    size_t cap = (size_t)(w + 4) * (hlen + 4) * 2 + strlen(content) + 256;
+    int w   = visual_len(content);
+    int pad = (int)padding;
+    int inner = w + 2 + 2 * pad;  /* total horizontal space between side chars */
+    int hlen  = (int)strlen(h);
+    size_t cap = (size_t)(inner + 4) * (hlen + 1) * 2
+               + (size_t)(pad * 2 + 3) * (inner + 80)
+               + strlen(content) + 512;
     char *o = malloc(cap); char *p = o;
 
+    /* top border */
     p += sprintf(p, "\033[%sm%s", fc, tl);
-    for (int i = 0; i < w + 2; i++) p += sprintf(p, "%s", h);
+    for (int i = 0; i < inner; i++) p += sprintf(p, "%s", h);
     p += sprintf(p, "%s\033[0m\n", tr);
 
-    p += sprintf(p, "\033[%sm%s\033[0m %s \033[%sm%s\033[0m\n", fc, v, content, fc, v);
+    /* blank rows above content */
+    for (int r = 0; r < pad; r++) {
+        p += sprintf(p, "\033[%sm%s\033[0m%*s\033[%sm%s\033[0m\n", fc, v, inner, "", fc, v);
+    }
 
+    /* content row: (pad+1) spaces each side */
+    p += sprintf(p, "\033[%sm%s\033[0m%*s%s%*s\033[%sm%s\033[0m\n",
+                 fc, v, pad + 1, "", content, pad + 1, "", fc, v);
+
+    /* blank rows below content */
+    for (int r = 0; r < pad; r++) {
+        p += sprintf(p, "\033[%sm%s\033[0m%*s\033[%sm%s\033[0m\n", fc, v, inner, "", fc, v);
+    }
+
+    /* bottom border */
     p += sprintf(p, "\033[%sm%s", fc, bl);
-    for (int i = 0; i < w + 2; i++) p += sprintf(p, "%s", h);
+    for (int i = 0; i < inner; i++) p += sprintf(p, "%s", h);
     p += sprintf(p, "%s\033[0m", br);
 
     for (int i = 0; i < nc; i++) free(ch[i]);
