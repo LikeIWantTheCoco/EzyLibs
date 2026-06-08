@@ -309,6 +309,28 @@ char *cli_box(const char *text) {
     return o;
 }
 
+/* like cli_box but frame and text use separate colors.
+   frame_color colors the border chars; text_color colors the inner text. */
+char *cli_box_color(const char *text, const char *frame_color, const char *text_color) {
+    if (!text) text = "";
+    const char *fc = color_code(frame_color);
+    const char *tc = color_code(text_color);
+    int w = (int)strlen(text);
+    size_t cap = (size_t)w * 8 + 256;
+    char *o = malloc(cap); char *p = o;
+    /* top border */
+    p += sprintf(p, "\033[%sm┌", fc);
+    for (int i = 0; i < w + 2; i++) p += sprintf(p, "─");
+    p += sprintf(p, "┐\033[0m\n");
+    /* middle: colored border, colored text */
+    p += sprintf(p, "\033[%sm│\033[0m \033[%sm%s\033[0m \033[%sm│\033[0m\n", fc, tc, text, fc);
+    /* bottom border */
+    p += sprintf(p, "\033[%sm└", fc);
+    for (int i = 0; i < w + 2; i++) p += sprintf(p, "─");
+    p += sprintf(p, "┘\033[0m");
+    return o;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Templates
    ═══════════════════════════════════════════════════════════════ */

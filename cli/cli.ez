@@ -40,6 +40,7 @@ extern fn cli_color(text: string, color: string) -> string  # red green yellow b
 extern fn cli_bold(text: string) -> string
 extern fn cli_dim(text: string) -> string
 extern fn cli_box(text: string) -> string                   # draw a box → multi-line string
+extern fn cli_box_color(text: string, frame_color: string, text_color: string) -> string  # box with separate frame/text colors
 
 # ── Templates ─────────────────────────────────────────
 # picker: options is a newline-separated list; dir is "vertical" or "horizontal"
