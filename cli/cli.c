@@ -23,6 +23,7 @@
 #include <unistd.h>
 #include <termios.h>
 #include <poll.h>
+#include <sys/ioctl.h>
 
 #define MAX_VARS 256
 #define MAX_OPTS 64
@@ -268,6 +269,22 @@ long long cli_move(long long row, long long col) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   Terminal size queries
+   ═══════════════════════════════════════════════════════════════ */
+long long cli_term_width(void) {
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+        return ws.ws_col;
+    return 80;
+}
+long long cli_term_height(void) {
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0)
+        return ws.ws_row;
+    return 24;
+}
+
+/* ═══════════════════════════════════════════════════════════════
    Styling helpers — return styled strings to use as values
    ═══════════════════════════════════════════════════════════════ */
 static const char *color_code(const char *c) {
@@ -395,6 +412,136 @@ char *cli_make_box(const char *content, const char *frame_color, const char *cha
 
     for (int i = 0; i < nc; i++) free(ch[i]);
     return o;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Layout helpers — return strings for composing layouts
+   ═══════════════════════════════════════════════════════════════ */
+
+/* repeat UTF-8 glyph `ch` exactly `n` times */
+char *cli_divider(const char *ch, long long n) {
+    if (!ch || !*ch) ch = "-";
+    if (n <= 0) return strdup("");
+    int clen = utf8_seq((unsigned char)*ch);
+    char *o = malloc((size_t)n * clen + 4); char *p = o;
+    for (long long i = 0; i < n; i++) { memcpy(p, ch, clen); p += clen; }
+    *p = '\0';
+    return o;
+}
+
+/* center text in `width` visual columns, padding with spaces */
+char *cli_center(const char *text, long long width) {
+    if (!text) text = "";
+    int vlen = visual_len(text);
+    int total = (int)width - vlen;
+    if (total <= 0) return strdup(text);
+    int lpad = total / 2, rpad = total - lpad;
+    size_t cap = strlen(text) + lpad + rpad + 4;
+    char *o = malloc(cap); char *p = o;
+    for (int i = 0; i < lpad; i++) *p++ = ' ';
+    memcpy(p, text, strlen(text)); p += strlen(text);
+    for (int i = 0; i < rpad; i++) *p++ = ' ';
+    *p = '\0';
+    return o;
+}
+
+/* left-align: pad right with spaces to reach `width` visual columns */
+char *cli_ljust(const char *text, long long width) {
+    if (!text) text = "";
+    int pad = (int)width - visual_len(text);
+    if (pad <= 0) return strdup(text);
+    size_t cap = strlen(text) + pad + 4;
+    char *o = malloc(cap);
+    memcpy(o, text, strlen(text));
+    char *p = o + strlen(text);
+    for (int i = 0; i < pad; i++) *p++ = ' ';
+    *p = '\0';
+    return o;
+}
+
+/* right-align: pad left with spaces to reach `width` visual columns */
+char *cli_rjust(const char *text, long long width) {
+    if (!text) text = "";
+    int pad = (int)width - visual_len(text);
+    if (pad <= 0) return strdup(text);
+    size_t cap = strlen(text) + pad + 4;
+    char *o = malloc(cap); char *p = o;
+    for (int i = 0; i < pad; i++) *p++ = ' ';
+    memcpy(p, text, strlen(text)); p += strlen(text);
+    *p = '\0';
+    return o;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   UI components
+   ═══════════════════════════════════════════════════════════════ */
+
+/* colored ✓ / ✗ status indicator */
+char *cli_status(const char *label, long long ok) {
+    if (!label) label = "";
+    const char *icon  = ok ? "✓" : "✗";
+    const char *color = ok ? "32" : "31";
+    size_t cap = strlen(label) + 32;
+    char *o = malloc(cap);
+    snprintf(o, cap, "\033[%sm%s\033[0m %s", color, icon, label);
+    return o;
+}
+
+/* bold colored badge: [text] */
+char *cli_badge(const char *text, const char *color) {
+    if (!text) text = "";
+    const char *cc = color_code(color);
+    size_t cap = strlen(text) + 32;
+    char *o = malloc(cap);
+    snprintf(o, cap, "\033[1;%sm[%s]\033[0m", cc, text);
+    return o;
+}
+
+/* draw a framed input box (top border, empty middle, bottom border),
+   position cursor in the middle, read a line with `prompt`, return it.
+   width=0 → use terminal width - 4.  frame_color="" → no color. */
+char *cli_inputbox(const char *prompt, long long width, const char *frame_color) {
+    if (!prompt) prompt = "";
+    if (width <= 0) width = cli_term_width() - 4;
+    if (width < 4) width = 4;
+
+    /* build raw border */
+    int hlen = 3; /* "─" is 3 UTF-8 bytes */
+    char *raw = malloc((size_t)width * hlen + 4); char *rp = raw;
+    for (long long i = 0; i < width; i++) { memcpy(rp, "─", 3); rp += 3; }
+    *rp = '\0';
+
+    /* optionally colorize */
+    char *border;
+    if (frame_color && *frame_color) {
+        const char *fc = color_code(frame_color);
+        size_t bcap = strlen(raw) + 24;
+        border = malloc(bcap);
+        snprintf(border, bcap, "\033[%sm%s\033[0m", fc, raw);
+        free(raw);
+    } else {
+        border = raw;
+    }
+
+    /* draw: top \n blank \n bottom \n */
+    printf("%s\n\n%s\n", border, border);
+    fflush(stdout);
+    free(border);
+
+    /* move cursor up 2 to the blank middle line */
+    if (is_tty()) { printf("\033[2A"); fflush(stdout); }
+
+    /* print prompt and read line */
+    if (*prompt) { printf("%s", prompt); fflush(stdout); }
+    char buf[4096]; buf[0] = '\0';
+    if (fgets(buf, sizeof(buf), stdin)) {
+        int l = (int)strlen(buf);
+        if (l > 0 && buf[l-1] == '\n') buf[l-1] = '\0';
+    }
+
+    /* move cursor past the box */
+    if (is_tty()) { printf("\033[1B\r"); fflush(stdout); }
+    return strdup(buf);
 }
 
 /* ═══════════════════════════════════════════════════════════════

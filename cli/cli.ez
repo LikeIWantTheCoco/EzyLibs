@@ -37,6 +37,10 @@ extern fn cli_cursor_up(n: int) -> int    # move cursor up n lines (relative)
 extern fn cli_cursor_down(n: int) -> int  # move cursor down n lines (relative)
 extern fn cli_move(row: int, col: int) -> int
 
+# ── Terminal size ──────────────────────────────────────
+extern fn cli_term_width() -> int         # current terminal column count (fallback: 80)
+extern fn cli_term_height() -> int        # current terminal row count    (fallback: 24)
+
 # ── Styling (return styled strings to use as values) ──
 extern fn cli_color(text: string, color: string) -> string  # red green yellow blue magenta cyan white grey
 extern fn cli_bold(text: string) -> string
@@ -46,6 +50,21 @@ extern fn cli_make_box(content: string, frame_color: string, chars: string, padd
 # chars: 5 glyphs "tl h tr bl br"  or  6 glyphs "tl h tr v bl br". "" = default "┌─┐│└┘"
 # padding: spaces added left/right and blank rows added top/bottom inside the box
 # example: cli_make_box(cli_color("Hi","white"), "blue", "╔═╗║╚╝", 1)
+
+# ── Layout helpers (return strings) ───────────────────
+extern fn cli_divider(ch: string, n: int) -> string   # repeat glyph n times: cli_divider("─", 40)
+extern fn cli_center(text: string, width: int) -> string  # center in width columns
+extern fn cli_ljust(text: string, width: int) -> string   # left-align, pad right with spaces
+extern fn cli_rjust(text: string, width: int) -> string   # right-align, pad left with spaces
+
+# ── UI components ──────────────────────────────────────
+extern fn cli_status(label: string, ok: int) -> string    # ✓/✗ colored status: cli_status("tests pass", 1)
+extern fn cli_badge(text: string, color: string) -> string # bold colored [badge]
+
+# ── Input template ─────────────────────────────────────
+# draw top/bottom borders, position cursor in middle, read a line, return it.
+# width=0 → terminal width - 4.  frame_color="" → no color.
+extern fn cli_inputbox(prompt: string, width: int, frame_color: string) -> string
 
 # ── Templates ─────────────────────────────────────────
 # picker: options is a newline-separated list; dir is "vertical" or "horizontal"
