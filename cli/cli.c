@@ -110,9 +110,13 @@ static int draw_at(int row, int col, const char *val, int old_lines) {
         if (!nl) break;
         p = nl + 1;
     }
-    for (int e = line; e < old_lines; e++)     /* clear leftover old lines */
-        printf("\033[%d;%dH\033[K", row + e, col);
+    if (line < old_lines) {
+        /* delete surplus lines physically so they don't leave blank gaps */
+        printf("\033[%d;1H\033[%dM", row + line, old_lines - line);
+    }
     fputs("\033[u", stdout);                   /* restore cursor */
+    if (line < old_lines)
+        printf("\033[%dA", old_lines - line);  /* move up to match new size */
     fflush(stdout);
     return line;
 }
