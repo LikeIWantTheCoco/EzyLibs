@@ -121,3 +121,111 @@ extern fn cli_progress(name: string, percent: int, width: int) -> int
 
 extern fn cli_spinner(name: string) -> int
 # call repeatedly in a loop to advance one frame
+
+# ── Interactive menu  (blocking arrow-key chooser) ───────────────
+extern fn cli_menu(title: string, options: string) -> int
+# ↑/↓ (or k/j) to move, Enter to pick, q/Esc to cancel (-1).
+# returns the selected 0-based index. options = newline-separated list.
+# i = cli_menu("Pick:", "Apple\nBanana\nCherry")
+
+# ════════════════════════════════════════════════════════════════
+#  EASY API — short, python-like helpers built on the extern fns
+#  above. Names are unprefixed for ergonomics; importing cli brings
+#  them into scope, so avoid shadowing them in your own program.
+# ════════════════════════════════════════════════════════════════
+
+# ── Style  (return styled strings — compose freely: bold(red("x"))) ─
+fn bold(s: string) -> string:    { return cli_bold(s) }
+fn dim(s: string) -> string:     { return cli_dim(s) }
+fn red(s: string) -> string:     { return cli_color(s, "red") }
+fn green(s: string) -> string:   { return cli_color(s, "green") }
+fn yellow(s: string) -> string:  { return cli_color(s, "yellow") }
+fn blue(s: string) -> string:    { return cli_color(s, "blue") }
+fn magenta(s: string) -> string: { return cli_color(s, "magenta") }
+fn cyan(s: string) -> string:    { return cli_color(s, "cyan") }
+fn white(s: string) -> string:   { return cli_color(s, "white") }
+fn grey(s: string) -> string:    { return cli_color(s, "grey") }
+
+# ── Output  (print a whole line) ─────────────────────────────────
+fn say(text: string):            { cli_text(text) }              # like print, via cli
+fn br():                         { cli_newline() }               # blank line
+fn error(msg: string):           { cli_text(cli_alert(msg, "error")) }
+fn warn(msg: string):            { cli_text(cli_alert(msg, "warn")) }
+fn info(msg: string):            { cli_text(cli_alert(msg, "info")) }
+fn ok(msg: string):              { cli_text(cli_alert(msg, "success")) }
+fn rule(color: string = "grey"): { cli_text(cli_color(cli_divider("─", cli_term_width()), color)) }
+fn heading(title: string, color: string = "cyan"): { cli_text(cli_section(title, color)) }
+fn box(text: string, color: string = "cyan"):      { cli_text(cli_make_box(text, color, "", 1)) }
+
+# ── Input  (python-like prompts) ─────────────────────────────────
+fn ask(prompt: string) -> string:   { return cli_ask(prompt) }
+fn confirm(question: string) -> bool: { return cli_confirm(question) == 1 }
+
+# choose: interactive menu that returns the picked option text ("" if cancelled)
+fn choose(title: string, options: string) -> string:
+{
+    i = cli_menu(title, options)
+    if i < 0:
+    {
+        return ""
+    }
+    parts = options.split("\n")
+    return parts[i]
+}
+
+# ── Keyboard events  (press a key → run a function) ──────────────
+# cli_read_key() blocks for one keypress and returns its name:
+#   "up" "down" "left" "right" "enter" "esc" "space" "tab" "backspace"
+#   or the literal character ("a", "1", ...).  "" on EOF.
+extern fn cli_read_key() -> string
+
+# dispatch: run every callback whose key matches `key`.
+# keys[i] is bound to cbs[i] (a fn() value). example:
+#   dispatch("up", ["up","down"], [arrow, go_down])
+fn dispatch<T>(key: string, keys: [string], cbs: [T]):
+{
+    _i = 0
+    _n = keys.len()
+    while _i < _n:
+    {
+        if keys[_i] == key:
+        {
+            _f = cbs[_i]
+            _f()
+        }
+        _i = _i + 1
+    }
+}
+
+# listen_until: read keys forever and fire the matching callback, until the
+# `quit` key is pressed or input ends. Hides the cursor during the loop.
+#   listen_until(["up"], [arrow], "q")    # press q to stop
+fn listen_until<T>(keys: [string], cbs: [T], quit: string):
+{
+    cli_cursor_hide()
+    _running = true
+    while _running:
+    {
+        _k = cli_read_key()
+        if _k == quit or _k == "":
+        {
+            _running = false
+        }
+        else:
+        {
+            dispatch(_k, keys, cbs)
+        }
+    }
+    cli_cursor_show()
+}
+
+# listen: same, quitting on Esc. Bind keys to functions with two parallel
+# arrays — keys[i] runs cbs[i] when pressed:
+#
+#   fn arrow():  { say("up!") }
+#   fn down():   { say("down!") }
+#   listen(["up", "down"], [arrow, down])      # press Esc to quit
+fn listen<T>(keys: [string], cbs: [T]):
+{
+    listen_until(keys, cbs, "esc")
+}

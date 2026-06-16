@@ -58,6 +58,7 @@ static CliVar *find(const char *name) {
     return NULL;
 }
 static CliVar *get_or_new(const char *name) {
+    if (!name) return NULL;
     CliVar *v = find(name);
     if (v) return v;
     for (int i = 0; i < MAX_VARS; i++)
@@ -740,4 +741,128 @@ long long cli_spinner(const char *name) {
     int f = (v->sel + 1) % 10; v->sel = f;
     cli_set(name, frames[f]);
     return 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Interactive menu — blocking arrow-key chooser
+   ═══════════════════════════════════════════════════════════════ */
+
+/* read one logical keypress in raw mode:
+   1001=up 1002=down  '\n'=enter  27=esc  else the byte (e.g. 'q','j','k') */
+static int read_key(void) {
+    unsigned char c;
+    if (read(STDIN_FILENO, &c, 1) != 1) return -1;
+    if (c == '\033') {                       /* could be ESC or an arrow seq */
+        struct pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
+        if (poll(&pfd, 1, 40) <= 0) return 27;   /* lone ESC */
+        unsigned char a;
+        if (read(STDIN_FILENO, &a, 1) != 1) return 27;
+        if (a == '[') {
+            unsigned char b;
+            if (read(STDIN_FILENO, &b, 1) != 1) return 27;
+            switch (b) {
+                case 'A': return 1001;       /* up    */
+                case 'B': return 1002;       /* down  */
+                case 'C': return 1003;       /* right */
+                case 'D': return 1004;       /* left  */
+            }
+        }
+        return 27;
+    }
+    if (c == '\r') return '\n';
+    return c;
+}
+
+/* block until one keypress, return its name as a string. Names:
+   "up" "down" "left" "right" "enter" "esc" "space" "tab" "backspace",
+   any other key as its literal character ("a", "1", ...). "" on EOF.
+   Pairs with the easy-API listen()/dispatch() loop in cli.ez. */
+char *cli_read_key(void) {
+    if (!is_tty()) {                         /* non-interactive: 1 char/line */
+        int c = fgetc(stdin);
+        if (c == EOF)  return strdup("");
+        if (c == '\n') return strdup("enter");
+        char b[2] = { (char)c, '\0' };
+        return strdup(b);
+    }
+    struct termios old, raw;
+    tcgetattr(STDIN_FILENO, &old);
+    raw = old;
+    raw.c_lflag &= ~(unsigned)(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    int k = read_key();
+    tcsetattr(STDIN_FILENO, TCSANOW, &old);
+
+    char buf[8];
+    const char *name;
+    switch (k) {
+        case 1001: name = "up";        break;
+        case 1002: name = "down";      break;
+        case 1003: name = "right";     break;
+        case 1004: name = "left";      break;
+        case '\n': name = "enter";     break;
+        case 27:   name = "esc";       break;
+        case ' ':  name = "space";     break;
+        case '\t': name = "tab";       break;
+        case 8: case 127: name = "backspace"; break;
+        case -1:   name = "";          break;
+        default:   buf[0] = (char)k; buf[1] = '\0'; name = buf; break;
+    }
+    return strdup(name);
+}
+
+/* draw an interactive vertical menu, let the user move with ↑/↓ (or k/j) and
+   pick with Enter; q/ESC cancels. Returns the selected 0-based index, or -1 on
+   cancel. `options` is a newline-separated list. Non-TTY → prints and returns 0.
+       i = cli_menu("Pick one:", "Apple\nBanana\nCherry") */
+long long cli_menu(const char *title, const char *options) {
+    char *opts[MAX_OPTS]; int n = 0;
+    const char *p = options ? options : "";
+    while (*p && n < MAX_OPTS) {
+        const char *nl = strchr(p, '\n');
+        int len = nl ? (int)(nl - p) : (int)strlen(p);
+        char *o = malloc(len + 1); memcpy(o, p, len); o[len] = '\0';
+        opts[n++] = o;
+        if (!nl) break;
+        p = nl + 1;
+    }
+    if (n == 0) return -1;
+
+    if (!is_tty()) {                         /* non-interactive: list + default */
+        if (title && *title) printf("%s\n", title);
+        for (int i = 0; i < n; i++) printf("  %s\n", opts[i]);
+        for (int i = 0; i < n; i++) free(opts[i]);
+        return 0;
+    }
+
+    struct termios old, raw;
+    tcgetattr(STDIN_FILENO, &old);
+    raw = old;
+    raw.c_lflag &= ~(unsigned)(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    fputs("\033[?25l", stdout);              /* hide cursor */
+
+    if (title && *title) printf("%s\n", title);
+    int sel = 0, drawn = 0;
+    for (;;) {
+        if (drawn) printf("\033[%dA", n);    /* rewind to top of list */
+        for (int i = 0; i < n; i++) {
+            if (i == sel) printf("\r\033[K\033[36m❯ %s\033[0m\n", opts[i]);
+            else          printf("\r\033[K  %s\n", opts[i]);
+        }
+        drawn = 1;
+        fflush(stdout);
+
+        int k = read_key();
+        if      (k == 1001 || k == 'k') sel = (sel - 1 + n) % n;
+        else if (k == 1002 || k == 'j') sel = (sel + 1) % n;
+        else if (k == '\n')             break;
+        else if (k == 27 || k == 'q')   { sel = -1; break; }
+    }
+
+    tcsetattr(STDIN_FILENO, TCSANOW, &old);
+    fputs("\033[?25h", stdout);              /* show cursor */
+    fflush(stdout);
+    for (int i = 0; i < n; i++) free(opts[i]);
+    return sel;
 }
