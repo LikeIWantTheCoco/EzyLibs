@@ -1,0 +1,102 @@
+# Tests for the gtk lib. Exercises widget creation + value round-trips WITHOUT
+# entering the event loop (no run()), so it is fast and pops no window.
+# Requires a display (gtk_init).  Run:  ezy run test_gtk.ez
+import gtk
+
+fails = 0
+fn check(name: string, cond: bool):
+{
+    global fails
+    if cond: { print("  PASS " + name) }
+    else:    { print("  FAIL " + name)  fails = fails + 1 }
+}
+
+fn main():
+{
+    win = app("test", 100, 100)      # inits GTK; window is never shown
+    check("window",  win != 0)
+
+    # ── widget creation returns non-zero handles ──
+    check("label_h",    label("x") != 0)
+    check("button_h",   button("x") != 0)
+    check("entry_h",    entry() != 0)
+    check("checkbox_h", checkbox("x") != 0)
+    check("vbox_h",     vbox() != 0)
+    check("hbox_h",     hbox() != 0)
+    check("grid_h",     grid() != 0)
+    check("scroll_h",   scrollable() != 0)
+    check("textarea_h", textarea() != 0)
+    check("dropdown_h", dropdown() != 0)
+    check("slider_h",   slider(0, 10) != 0)
+    check("progress_h", progress() != 0)
+    check("toggle_h",   toggle("x") != 0)
+    check("frame_h",    frame("x") != 0)
+    check("sep_h",      hsep() != 0)
+    check("notebook_h", notebook() != 0)
+    check("spinner_h",  busy() != 0)
+    check("list_h",     list() != 0)
+    check("table_h",    table("A\tB") != 0)
+    check("menubar_h",  menubar() != 0)
+    check("menu_h",     menu() != 0)
+    check("menuitem_h", menu_item("x") != 0)
+
+    # ── text round-trips ──
+    e = entry()
+    set_text(e, "hello")
+    check("entry_text", get_text(e) == "hello")
+
+    lbl = label("hi")
+    check("label_get", get_text(lbl) == "hi")
+    set_text(lbl, "bye")
+    check("label_set", get_text(lbl) == "bye")
+
+    b = button("press")
+    check("button_get", get_text(b) == "press")
+
+    ta = textarea()
+    set_textarea(ta, "multi\nline\ntext")
+    check("textarea_rt", get_textarea(ta) == "multi\nline\ntext")
+
+    # ── dropdown ──
+    dd = dropdown()
+    option(dd, "Red")
+    option(dd, "Green")
+    option(dd, "Blue")
+    set_selected(dd, 1)
+    check("combo_index", selected(dd) == 1)
+    check("combo_text",  selected_text(dd) == "Green")
+
+    # ── numeric widgets ──
+    sp = spinner_num(0, 100, 1)
+    set_spin(sp, 7)
+    check("spin_rt", spin_value(sp) == 7)
+
+    sl = slider(0, 100, 5)
+    set_slider(sl, 50)
+    check("slider_rt", slider_value(sl) == 50)
+
+    # ── toggle / checkbox state ──
+    tg = toggle("on")
+    set_checked(tg, true)
+    check("toggle_on",  checked(tg))
+    set_checked(tg, false)
+    check("toggle_off", not checked(tg))
+
+    cb = checkbox("opt")
+    check("check_default", not checked(cb))
+
+    # ── list: nothing selected yet ──
+    ls = list()
+    list_add(ls, "one")
+    list_add(ls, "two")
+    check("list_unselected", list_selected(ls) == -1)
+
+    # ── table accepts rows without crashing ──
+    tb = table("Name\tAge")
+    table_row(tb, "Ada\t36")
+    table_row(tb, "Grace\t45")
+    check("table_rows", tb != 0)
+
+    if fails > 0: { exit(1) }
+    print("test_gtk: OK")
+}
