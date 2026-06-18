@@ -24,9 +24,18 @@
 #include <termios.h>
 #include <poll.h>
 #include <sys/ioctl.h>
+#include <signal.h>
 
 #define MAX_VARS 256
 #define MAX_OPTS 64
+
+/* malloc that never returns NULL — a CLI UI lib has no sane recovery from
+   OOM, so we report and exit instead of risking a NULL deref everywhere. */
+static void *xmalloc(size_t n) {
+    void *p = malloc(n);
+    if (!p) { fputs("cli: out of memory\n", stderr); exit(1); }
+    return p;
+}
 
 typedef struct {
     char *name;
@@ -49,6 +58,54 @@ static int    g_tty = -1;   /* lazily: 1 if interactive */
 static int is_tty(void) {
     if (g_tty < 0) g_tty = (isatty(STDOUT_FILENO) && isatty(STDIN_FILENO)) ? 1 : 0;
     return g_tty;
+}
+
+/* ── shared TTY state: raw mode + cursor visibility ──
+   Every raw-mode entry and cursor-hide is tracked so a SIGINT/SIGTERM (or
+   normal exit) restores the terminal — no more leaving the shell in raw mode
+   with the cursor hidden after Ctrl-C inside a menu. */
+static struct termios g_saved_tio;
+static int            g_raw = 0;          /* raw mode currently active */
+static int            g_cur_hidden = 0;   /* cursor currently hidden */
+
+static void tty_show_cursor(void) {
+    if (g_cur_hidden) { fputs("\033[?25h", stdout); fflush(stdout); g_cur_hidden = 0; }
+}
+static void tty_hide_cursor(void) {
+    if (is_tty() && !g_cur_hidden) { fputs("\033[?25l", stdout); fflush(stdout); g_cur_hidden = 1; }
+}
+
+/* enter raw mode; returns 1 if THIS call switched it on (caller should leave),
+   0 if already raw or not a TTY. Sets VMIN=1/VTIME=0 for blocking 1-byte reads. */
+static int tty_raw_enter(void) {
+    if (!is_tty() || g_raw) return 0;
+    if (tcgetattr(STDIN_FILENO, &g_saved_tio) != 0) return 0;
+    struct termios raw = g_saved_tio;
+    raw.c_lflag &= ~(unsigned)(ICANON | ECHO);
+    raw.c_cc[VMIN]  = 1;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    g_raw = 1;
+    return 1;
+}
+static void tty_raw_leave(void) {
+    if (g_raw) { tcsetattr(STDIN_FILENO, TCSANOW, &g_saved_tio); g_raw = 0; }
+}
+static void tty_cleanup(void) { tty_raw_leave(); tty_show_cursor(); }
+
+static void on_signal(int sig) {
+    tty_cleanup();
+    signal(sig, SIG_DFL);
+    raise(sig);                 /* re-raise so the process dies as expected */
+}
+/* install once: restore the terminal on exit and on Ctrl-C / kill */
+static void ensure_handlers(void) {
+    static int done = 0;
+    if (done) return;
+    done = 1;
+    atexit(tty_cleanup);
+    signal(SIGINT,  on_signal);
+    signal(SIGTERM, on_signal);
 }
 
 static CliVar *find(const char *name) {
@@ -74,12 +131,9 @@ static CliVar *get_or_new(const char *name) {
 /* ── cursor position query (DSR) ── */
 static int query_cursor(int *row, int *col) {
     if (!is_tty()) return 0;
-    struct termios old, raw;
-    if (tcgetattr(STDIN_FILENO, &old) != 0) return 0;
-    raw = old;
-    raw.c_lflag &= ~(unsigned)(ICANON | ECHO);
-    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
-    if (write(STDOUT_FILENO, "\033[6n", 4) != 4) { tcsetattr(STDIN_FILENO, TCSANOW, &old); return 0; }
+    ensure_handlers();
+    int entered = tty_raw_enter();            /* leave only if we switched it on */
+    if (write(STDOUT_FILENO, "\033[6n", 4) != 4) { if (entered) tty_raw_leave(); return 0; }
     char buf[32]; int i = 0;
     struct pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
     while (i < 31) {
@@ -89,7 +143,7 @@ static int query_cursor(int *row, int *col) {
         if (c == 'R') break;
     }
     buf[i] = '\0';
-    tcsetattr(STDIN_FILENO, TCSANOW, &old);
+    if (entered) tty_raw_leave();
     return sscanf(buf, "\033[%d;%dR", row, col) == 2;
 }
 
@@ -291,8 +345,10 @@ long long cli_remove(const char *name) {
    Screen / cursor control
    ═══════════════════════════════════════════════════════════════ */
 long long cli_clear(void)       { if (is_tty()) { fputs("\033[2J\033[H", stdout); fflush(stdout);} return 0; }
-long long cli_cursor_hide(void) { if (is_tty()) { fputs("\033[?25l", stdout); fflush(stdout);} return 0; }
-long long cli_cursor_show(void) { if (is_tty()) { fputs("\033[?25h", stdout); fflush(stdout);} return 0; }
+long long cli_cursor_hide(void) { ensure_handlers(); tty_hide_cursor(); return 0; }
+long long cli_cursor_show(void) { tty_show_cursor(); return 0; }
+/* clear from cursor to end of line (and return to column 1) */
+long long cli_clear_line(void) { if (is_tty()) { fputs("\r\033[K", stdout); fflush(stdout); } return 0; }
 long long cli_cursor_up(long long n)   { if (is_tty() && n > 0) { printf("\033[%lldA", n); fflush(stdout); } return 0; }
 long long cli_cursor_down(long long n) { if (is_tty() && n > 0) { printf("\033[%lldB", n); fflush(stdout); } return 0; }
 long long cli_move(long long row, long long col) {
@@ -331,21 +387,56 @@ static const char *color_code(const char *c) {
     if (!strcmp(c,"grey") || !strcmp(c,"gray")) return "90";
     return "0";
 }
-char *cli_color(const char *text, const char *color) {
+/* background SGR code for a named color (foreground + 10) */
+static const char *bgcolor_code(const char *c) {
+    if (!c) return "49";
+    if (!strcmp(c,"red"))     return "41";
+    if (!strcmp(c,"green"))   return "42";
+    if (!strcmp(c,"yellow"))  return "43";
+    if (!strcmp(c,"blue"))    return "44";
+    if (!strcmp(c,"magenta")) return "45";
+    if (!strcmp(c,"cyan"))    return "46";
+    if (!strcmp(c,"white"))   return "47";
+    if (!strcmp(c,"grey") || !strcmp(c,"gray")) return "100";
+    return "49";
+}
+/* wrap text in a single SGR attribute code, auto-reset */
+static char *style_wrap(const char *text, const char *sgr) {
     if (!text) text = "";
-    size_t n = strlen(text) + 24;
-    char *o = malloc(n);
-    snprintf(o, n, "\033[%sm%s\033[0m", color_code(color), text);
+    size_t n = strlen(text) + strlen(sgr) + 8;
+    char *o = xmalloc(n);
+    snprintf(o, n, "\033[%sm%s\033[0m", sgr, text);
     return o;
 }
-char *cli_bold(const char *text) {
-    if (!text) text = "";
-    size_t n = strlen(text) + 12; char *o = malloc(n);
-    snprintf(o, n, "\033[1m%s\033[0m", text); return o;
+char *cli_color(const char *text, const char *color) {
+    return style_wrap(text, color_code(color));
 }
+/* set the background color: red green yellow blue magenta cyan white grey */
+char *cli_bg(const char *text, const char *color) {
+    return style_wrap(text, bgcolor_code(color));
+}
+/* 256-color palette foreground (0–255) */
+static long long clamp255(long long v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
+char *cli_color256(const char *text, long long code) {
+    code = clamp255(code);
+    char sgr[16]; snprintf(sgr, sizeof sgr, "38;5;%lld", code);
+    return style_wrap(text, sgr);
+}
+/* true-color (24-bit RGB) foreground */
+char *cli_rgb(const char *text, long long r, long long g, long long b) {
+    r = clamp255(r); g = clamp255(g); b = clamp255(b);
+    char sgr[24]; snprintf(sgr, sizeof sgr, "38;2;%lld;%lld;%lld", r, g, b);
+    return style_wrap(text, sgr);
+}
+char *cli_bold(const char *text)      { return style_wrap(text, "1"); }
+char *cli_underline(const char *text) { return style_wrap(text, "4"); }
+char *cli_italic(const char *text)    { return style_wrap(text, "3"); }
+char *cli_reverse(const char *text)   { return style_wrap(text, "7"); }
+char *cli_strike(const char *text)    { return style_wrap(text, "9"); }
+char *cli_blink(const char *text)     { return style_wrap(text, "5"); }
 char *cli_dim(const char *text) {
     if (!text) text = "";
-    size_t n = strlen(text) + 12; char *o = malloc(n);
+    size_t n = strlen(text) + 12; char *o = xmalloc(n);
     snprintf(o, n, "\033[2m%s\033[0m", text); return o;
 }
 
@@ -379,7 +470,7 @@ static int parse_box_chars(const char *s, char **out, int max) {
     int n = 0;
     while (s && *s && n < max) {
         int len = utf8_seq((unsigned char)*s);
-        char *ch = malloc(len + 1);
+        char *ch = xmalloc(len + 1);
         memcpy(ch, s, len); ch[len] = '\0';
         out[n++] = ch;
         s += len;
@@ -409,14 +500,25 @@ char *cli_make_box(const char *content, const char *frame_color, const char *cha
     else if (nc == 5) { v = "│"; bl = ch[3]; br = ch[4]; }
     else { v = "│"; bl = "└"; br = "┘"; }
 
-    int w   = visual_len(content);
+    /* box width = widest content line (content may span multiple '\n' lines) */
+    int maxw = 0, nlines = 0;
+    for (const char *q = content; ; ) {
+        const char *nl = strchr(q, '\n');
+        int seg = nl ? (int)(nl - q) : (int)strlen(q);
+        char *ln = xmalloc(seg + 1); memcpy(ln, q, seg); ln[seg] = '\0';
+        int vl = visual_len(ln); free(ln);
+        if (vl > maxw) maxw = vl;
+        nlines++;
+        if (!nl) break;
+        q = nl + 1;
+    }
     int pad = (int)padding;
-    int inner = w + 2 + 2 * pad;  /* total horizontal space between side chars */
+    int inner = maxw + 2 + 2 * pad;  /* total horizontal space between side chars */
     int hlen  = (int)strlen(h);
     size_t cap = (size_t)(inner + 4) * (hlen + 1) * 2
-               + (size_t)(pad * 2 + 3) * (inner + 80)
-               + strlen(content) + 512;
-    char *o = malloc(cap); char *p = o;
+               + (size_t)(2 * pad + nlines + 2) * (inner + 120)
+               + strlen(content) * 2 + 512;
+    char *o = xmalloc(cap); char *p = o;
 
     /* top border */
     p += sprintf(p, "\033[%sm%s", fc, tl);
@@ -428,9 +530,19 @@ char *cli_make_box(const char *content, const char *frame_color, const char *cha
         p += sprintf(p, "\033[%sm%s\033[0m%*s\033[%sm%s\033[0m\n", fc, v, inner, "", fc, v);
     }
 
-    /* content row: (pad+1) spaces each side */
-    p += sprintf(p, "\033[%sm%s\033[0m%*s%s%*s\033[%sm%s\033[0m\n",
-                 fc, v, pad + 1, "", content, pad + 1, "", fc, v);
+    /* content rows: (pad+1) spaces each side, each line left-aligned to maxw */
+    for (const char *q = content; ; ) {
+        const char *nl = strchr(q, '\n');
+        int seg = nl ? (int)(nl - q) : (int)strlen(q);
+        char *ln = xmalloc(seg + 1); memcpy(ln, q, seg); ln[seg] = '\0';
+        int rfill = maxw - visual_len(ln);
+        if (rfill < 0) rfill = 0;
+        p += sprintf(p, "\033[%sm%s\033[0m%*s%s%*s%*s\033[%sm%s\033[0m\n",
+                     fc, v, pad + 1, "", ln, rfill, "", pad + 1, "", fc, v);
+        free(ln);
+        if (!nl) break;
+        q = nl + 1;
+    }
 
     /* blank rows below content */
     for (int r = 0; r < pad; r++) {
@@ -455,7 +567,7 @@ char *cli_divider(const char *ch, long long n) {
     if (!ch || !*ch) ch = "-";
     if (n <= 0) return strdup("");
     int clen = utf8_seq((unsigned char)*ch);
-    char *o = malloc((size_t)n * clen + 4); char *p = o;
+    char *o = xmalloc((size_t)n * clen + 4); char *p = o;
     for (long long i = 0; i < n; i++) { memcpy(p, ch, clen); p += clen; }
     *p = '\0';
     return o;
@@ -469,7 +581,7 @@ char *cli_center(const char *text, long long width) {
     if (total <= 0) return strdup(text);
     int lpad = total / 2, rpad = total - lpad;
     size_t cap = strlen(text) + lpad + rpad + 4;
-    char *o = malloc(cap); char *p = o;
+    char *o = xmalloc(cap); char *p = o;
     for (int i = 0; i < lpad; i++) *p++ = ' ';
     memcpy(p, text, strlen(text)); p += strlen(text);
     for (int i = 0; i < rpad; i++) *p++ = ' ';
@@ -483,7 +595,7 @@ char *cli_ljust(const char *text, long long width) {
     int pad = (int)width - visual_len(text);
     if (pad <= 0) return strdup(text);
     size_t cap = strlen(text) + pad + 4;
-    char *o = malloc(cap);
+    char *o = xmalloc(cap);
     memcpy(o, text, strlen(text));
     char *p = o + strlen(text);
     for (int i = 0; i < pad; i++) *p++ = ' ';
@@ -497,7 +609,7 @@ char *cli_rjust(const char *text, long long width) {
     int pad = (int)width - visual_len(text);
     if (pad <= 0) return strdup(text);
     size_t cap = strlen(text) + pad + 4;
-    char *o = malloc(cap); char *p = o;
+    char *o = xmalloc(cap); char *p = o;
     for (int i = 0; i < pad; i++) *p++ = ' ';
     memcpy(p, text, strlen(text)); p += strlen(text);
     *p = '\0';
@@ -514,7 +626,7 @@ char *cli_section(const char *title, const char *color) {
     long long w = cli_term_width();
     const char *cc = color_code(color && *color ? color : "white");
     size_t cap = (size_t)w * 6 + strlen(title) + 128;
-    char *o = malloc(cap); char *p = o;
+    char *o = xmalloc(cap); char *p = o;
     p += sprintf(p, "\033[%sm", cc);
     for (int i = 0; i < (int)w; i++) { memcpy(p, "─", 3); p += 3; }
     p += sprintf(p, "\033[0m\n\033[1;%sm  %s\033[0m\n\033[%sm", cc, title, cc);
@@ -534,7 +646,7 @@ char *cli_title(const char *text, const char *color) {
     int rside = (int)w - sides - vlen - 2;
     if (rside < 1) rside = 1;
     size_t cap = (size_t)(sides + rside) * 3 + strlen(text) + 64;
-    char *o = malloc(cap); char *p = o;
+    char *o = xmalloc(cap); char *p = o;
     p += sprintf(p, "\033[%sm", cc);
     for (int i = 0; i < sides; i++) { memcpy(p, "─", 3); p += 3; }
     p += sprintf(p, " %s ", text);
@@ -553,7 +665,7 @@ char *cli_alert(const char *text, const char *type) {
     else if (!strcmp(type,"success")) { color="32"; icon="✓"; }
     else                              { color="36"; icon="ℹ"; }
     size_t cap = strlen(text) + 64;
-    char *o = malloc(cap);
+    char *o = xmalloc(cap);
     snprintf(o, cap, "\033[%sm%s  %s\033[0m", color, icon, text);
     return o;
 }
@@ -567,6 +679,46 @@ char *cli_ask(const char *prompt) {
         int l = (int)strlen(buf);
         if (l > 0 && buf[l-1] == '\n') buf[l-1] = '\0';
     }
+    return strdup(buf);
+}
+
+/* masked prompt: reads a line without echoing it (prints `mask` per char, e.g.
+   "*", or nothing if mask==""). Handles backspace. For passwords/secrets.
+   Falls back to a plain read when not a TTY. */
+char *cli_ask_secret(const char *prompt, const char *mask) {
+    if (!prompt) prompt = "";
+    if (!mask) mask = "";
+    if (*prompt) { printf("%s", prompt); fflush(stdout); }
+
+    if (!is_tty()) {                          /* non-interactive: plain read */
+        char buf[4096]; buf[0] = '\0';
+        if (fgets(buf, sizeof(buf), stdin)) {
+            int l = (int)strlen(buf);
+            if (l > 0 && buf[l-1] == '\n') buf[l-1] = '\0';
+        }
+        return strdup(buf);
+    }
+
+    ensure_handlers();
+    int entered = tty_raw_enter();
+    char buf[4096]; int len = 0;
+    for (;;) {
+        unsigned char c;
+        if (read(STDIN_FILENO, &c, 1) != 1) break;     /* EOF */
+        if (c == '\n' || c == '\r') break;
+        if (c == 127 || c == 8) {                       /* backspace */
+            if (len > 0) { len--; if (*mask) fputs("\b \b", stdout); fflush(stdout); }
+            continue;
+        }
+        if (c == 3) { len = 0; break; }                 /* Ctrl-C-ish: bail empty */
+        if (len < (int)sizeof(buf) - 1) {
+            buf[len++] = (char)c;
+            if (*mask) { fputs(mask, stdout); fflush(stdout); }
+        }
+    }
+    buf[len] = '\0';
+    if (entered) tty_raw_leave();
+    fputc('\n', stdout); fflush(stdout);
     return strdup(buf);
 }
 
@@ -587,7 +739,7 @@ char *cli_status(const char *label, long long ok) {
     const char *icon  = ok ? "✓" : "✗";
     const char *color = ok ? "32" : "31";
     size_t cap = strlen(label) + 32;
-    char *o = malloc(cap);
+    char *o = xmalloc(cap);
     snprintf(o, cap, "\033[%sm%s\033[0m %s", color, icon, label);
     return o;
 }
@@ -597,7 +749,7 @@ char *cli_badge(const char *text, const char *color) {
     if (!text) text = "";
     const char *cc = color_code(color);
     size_t cap = strlen(text) + 32;
-    char *o = malloc(cap);
+    char *o = xmalloc(cap);
     snprintf(o, cap, "\033[1;%sm[%s]\033[0m", cc, text);
     return o;
 }
@@ -612,7 +764,7 @@ char *cli_inputbox(const char *prompt, long long width, const char *frame_color)
 
     /* build raw border */
     int hlen = 3; /* "─" is 3 UTF-8 bytes */
-    char *raw = malloc((size_t)width * hlen + 4); char *rp = raw;
+    char *raw = xmalloc((size_t)width * hlen + 4); char *rp = raw;
     for (long long i = 0; i < width; i++) { memcpy(rp, "─", 3); rp += 3; }
     *rp = '\0';
 
@@ -621,7 +773,7 @@ char *cli_inputbox(const char *prompt, long long width, const char *frame_color)
     if (frame_color && *frame_color) {
         const char *fc = color_code(frame_color);
         size_t bcap = strlen(raw) + 24;
-        border = malloc(bcap);
+        border = xmalloc(bcap);
         snprintf(border, bcap, "\033[%sm%s\033[0m", fc, raw);
         free(raw);
     } else {
@@ -656,7 +808,7 @@ char *cli_inputbox(const char *prompt, long long width, const char *frame_color)
 static void picker_render(CliVar *v) {
     size_t cap = 64;
     for (int i = 0; i < v->nopts; i++) cap += strlen(v->opts[i]) + 24;
-    char *buf = malloc(cap); buf[0] = '\0'; char *p = buf;
+    char *buf = xmalloc(cap); buf[0] = '\0'; char *p = buf;
     for (int i = 0; i < v->nopts; i++) {
         int on = (i == v->sel);
         if (v->vertical) {
@@ -685,7 +837,7 @@ char *cli_picker(const char *name, const char *dir, const char *options) {
     while (*p && v->nopts < MAX_OPTS) {
         const char *nl = strchr(p, '\n');
         int len = nl ? (int)(nl - p) : (int)strlen(p);
-        char *o = malloc(len + 1); memcpy(o, p, len); o[len] = '\0';
+        char *o = xmalloc(len + 1); memcpy(o, p, len); o[len] = '\0';
         v->opts[v->nopts++] = o;
         if (!nl) break;
         p = nl + 1;
@@ -723,7 +875,7 @@ long long cli_progress(const char *name, long long percent, long long width) {
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
     if (width <= 0) width = 20;
-    char *buf = malloc((size_t)width * 4 + 32);
+    char *buf = xmalloc((size_t)width * 4 + 32);
     char *p = buf; *p++ = '[';
     long long fill = percent * width / 100;
     for (long long i = 0; i < width; i++) p += sprintf(p, "%s", i < fill ? "█" : "░");
@@ -747,24 +899,50 @@ long long cli_spinner(const char *name) {
    Interactive menu — blocking arrow-key chooser
    ═══════════════════════════════════════════════════════════════ */
 
-/* read one logical keypress in raw mode:
-   1001=up 1002=down  '\n'=enter  27=esc  else the byte (e.g. 'q','j','k') */
+/* logical keypress codes */
+enum {
+    KEY_UP = 1001, KEY_DOWN, KEY_RIGHT, KEY_LEFT,
+    KEY_HOME, KEY_END, KEY_PGUP, KEY_PGDN, KEY_DEL
+};
+
+/* read one logical keypress in raw mode. Returns a KEY_* code for navigation
+   keys, '\n' for enter, 27 for ESC, the literal byte otherwise, -1 on EOF.
+   Extended sequences (\033[1~, \033[3~, …) are fully consumed so leftover
+   bytes never pollute the next read. */
 static int read_key(void) {
     unsigned char c;
     if (read(STDIN_FILENO, &c, 1) != 1) return -1;
-    if (c == '\033') {                       /* could be ESC or an arrow seq */
+    if (c == '\033') {                       /* could be ESC or a CSI/SS3 seq */
         struct pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
         if (poll(&pfd, 1, 40) <= 0) return 27;   /* lone ESC */
         unsigned char a;
         if (read(STDIN_FILENO, &a, 1) != 1) return 27;
-        if (a == '[') {
+        if (a == '[' || a == 'O') {
             unsigned char b;
             if (read(STDIN_FILENO, &b, 1) != 1) return 27;
             switch (b) {
-                case 'A': return 1001;       /* up    */
-                case 'B': return 1002;       /* down  */
-                case 'C': return 1003;       /* right */
-                case 'D': return 1004;       /* left  */
+                case 'A': return KEY_UP;
+                case 'B': return KEY_DOWN;
+                case 'C': return KEY_RIGHT;
+                case 'D': return KEY_LEFT;
+                case 'H': return KEY_HOME;    /* xterm home */
+                case 'F': return KEY_END;     /* xterm end  */
+            }
+            if (b >= '0' && b <= '9') {       /* \033[<num>~ — consume to final */
+                unsigned char seq[8]; int si = 0; seq[si++] = b;
+                unsigned char d;
+                while (si < 7 && read(STDIN_FILENO, &d, 1) == 1) {
+                    seq[si++] = d;
+                    if (d >= '@' && d <= '~') break;   /* CSI final byte */
+                }
+                seq[si] = '\0';
+                if (seq[si-1] == '~') {
+                    if (seq[0] == '1' || seq[0] == '7') return KEY_HOME;
+                    if (seq[0] == '4' || seq[0] == '8') return KEY_END;
+                    if (seq[0] == '3')                  return KEY_DEL;
+                    if (seq[0] == '5')                  return KEY_PGUP;
+                    if (seq[0] == '6')                  return KEY_PGDN;
+                }
             }
         }
         return 27;
@@ -785,21 +963,23 @@ char *cli_read_key(void) {
         char b[2] = { (char)c, '\0' };
         return strdup(b);
     }
-    struct termios old, raw;
-    tcgetattr(STDIN_FILENO, &old);
-    raw = old;
-    raw.c_lflag &= ~(unsigned)(ICANON | ECHO);
-    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    ensure_handlers();
+    int entered = tty_raw_enter();
     int k = read_key();
-    tcsetattr(STDIN_FILENO, TCSANOW, &old);
+    if (entered) tty_raw_leave();
 
     char buf[8];
     const char *name;
     switch (k) {
-        case 1001: name = "up";        break;
-        case 1002: name = "down";      break;
-        case 1003: name = "right";     break;
-        case 1004: name = "left";      break;
+        case KEY_UP:    name = "up";        break;
+        case KEY_DOWN:  name = "down";      break;
+        case KEY_RIGHT: name = "right";     break;
+        case KEY_LEFT:  name = "left";      break;
+        case KEY_HOME:  name = "home";      break;
+        case KEY_END:   name = "end";       break;
+        case KEY_PGUP:  name = "pageup";    break;
+        case KEY_PGDN:  name = "pagedown";  break;
+        case KEY_DEL:   name = "delete";    break;
         case '\n': name = "enter";     break;
         case 27:   name = "esc";       break;
         case ' ':  name = "space";     break;
@@ -821,7 +1001,7 @@ long long cli_menu(const char *title, const char *options) {
     while (*p && n < MAX_OPTS) {
         const char *nl = strchr(p, '\n');
         int len = nl ? (int)(nl - p) : (int)strlen(p);
-        char *o = malloc(len + 1); memcpy(o, p, len); o[len] = '\0';
+        char *o = xmalloc(len + 1); memcpy(o, p, len); o[len] = '\0';
         opts[n++] = o;
         if (!nl) break;
         p = nl + 1;
@@ -835,12 +1015,9 @@ long long cli_menu(const char *title, const char *options) {
         return 0;
     }
 
-    struct termios old, raw;
-    tcgetattr(STDIN_FILENO, &old);
-    raw = old;
-    raw.c_lflag &= ~(unsigned)(ICANON | ECHO);
-    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
-    fputs("\033[?25l", stdout);              /* hide cursor */
+    ensure_handlers();
+    tty_raw_enter();
+    tty_hide_cursor();
 
     if (title && *title) printf("%s\n", title);
     int sel = 0, drawn = 0;
@@ -854,15 +1031,185 @@ long long cli_menu(const char *title, const char *options) {
         fflush(stdout);
 
         int k = read_key();
-        if      (k == 1001 || k == 'k') sel = (sel - 1 + n) % n;
-        else if (k == 1002 || k == 'j') sel = (sel + 1) % n;
-        else if (k == '\n')             break;
-        else if (k == 27 || k == 'q')   { sel = -1; break; }
+        if      (k == KEY_UP   || k == 'k')  sel = (sel - 1 + n) % n;
+        else if (k == KEY_DOWN || k == 'j')  sel = (sel + 1) % n;
+        else if (k == KEY_HOME || k == KEY_PGUP) sel = 0;
+        else if (k == KEY_END  || k == KEY_PGDN) sel = n - 1;
+        else if (k == '\n')                  break;
+        else if (k == 27 || k == 'q' || k == -1) { sel = -1; break; }
+        /* k == -1 (EOF/read error) now cancels instead of spinning forever */
     }
 
-    tcsetattr(STDIN_FILENO, TCSANOW, &old);
-    fputs("\033[?25h", stdout);              /* show cursor */
-    fflush(stdout);
+    tty_raw_leave();
+    tty_show_cursor();
     for (int i = 0; i < n; i++) free(opts[i]);
     return sel;
+}
+
+/* interactive multi-select checklist. ↑/↓ (or k/j) move, Space toggles, Enter
+   confirms, q/Esc cancels. Returns a newline-separated list of the checked
+   option texts ("" if cancelled or nothing checked). Non-TTY → lists and
+   returns "". `options` is a newline-separated list.
+       picked = cli_checklist("Toppings:", "Cheese\nHam\nOlives") */
+char *cli_checklist(const char *title, const char *options) {
+    char *opts[MAX_OPTS]; int n = 0;
+    const char *p = options ? options : "";
+    while (*p && n < MAX_OPTS) {
+        const char *nl = strchr(p, '\n');
+        int len = nl ? (int)(nl - p) : (int)strlen(p);
+        char *o = xmalloc(len + 1); memcpy(o, p, len); o[len] = '\0';
+        opts[n++] = o;
+        if (!nl) break;
+        p = nl + 1;
+    }
+    if (n == 0) return strdup("");
+
+    int checked[MAX_OPTS]; for (int i = 0; i < n; i++) checked[i] = 0;
+
+    if (!is_tty()) {
+        if (title && *title) printf("%s\n", title);
+        for (int i = 0; i < n; i++) printf("  [ ] %s\n", opts[i]);
+        for (int i = 0; i < n; i++) free(opts[i]);
+        return strdup("");
+    }
+
+    ensure_handlers();
+    tty_raw_enter();
+    tty_hide_cursor();
+    if (title && *title) printf("%s\n", title);
+
+    int sel = 0, drawn = 0, cancelled = 0;
+    for (;;) {
+        if (drawn) printf("\033[%dA", n);
+        for (int i = 0; i < n; i++) {
+            const char *bx = checked[i] ? "[x]" : "[ ]";
+            if (i == sel) printf("\r\033[K\033[36m❯ %s %s\033[0m\n", bx, opts[i]);
+            else          printf("\r\033[K  %s %s\n", bx, opts[i]);
+        }
+        drawn = 1; fflush(stdout);
+
+        int k = read_key();
+        if      (k == KEY_UP   || k == 'k') sel = (sel - 1 + n) % n;
+        else if (k == KEY_DOWN || k == 'j') sel = (sel + 1) % n;
+        else if (k == KEY_HOME || k == KEY_PGUP) sel = 0;
+        else if (k == KEY_END  || k == KEY_PGDN) sel = n - 1;
+        else if (k == ' ')      checked[sel] = !checked[sel];
+        else if (k == '\n')     break;
+        else if (k == 27 || k == 'q' || k == -1) { cancelled = 1; break; }
+    }
+
+    tty_raw_leave();
+    tty_show_cursor();
+
+    char *res;
+    if (cancelled) {
+        res = strdup("");
+    } else {
+        size_t cap = 1;
+        for (int i = 0; i < n; i++) if (checked[i]) cap += strlen(opts[i]) + 1;
+        res = xmalloc(cap); char *rp = res; int first = 1;
+        for (int i = 0; i < n; i++) if (checked[i]) {
+            if (!first) *rp++ = '\n';
+            size_t l = strlen(opts[i]); memcpy(rp, opts[i], l); rp += l;
+            first = 0;
+        }
+        *rp = '\0';
+    }
+    for (int i = 0; i < n; i++) free(opts[i]);
+    return res;
+}
+
+/* split `s` on byte `sep` into out[] (each malloc'd), up to `max`; count back */
+static int split_into(const char *s, char sep, char **out, int max) {
+    int n = 0;
+    const char *p = s ? s : "";
+    for (;;) {
+        if (n >= max) break;
+        const char *e = strchr(p, sep);
+        int len = e ? (int)(e - p) : (int)strlen(p);
+        char *o = xmalloc(len + 1); memcpy(o, p, len); o[len] = '\0';
+        out[n++] = o;
+        if (!e) break;
+        p = e + 1;
+    }
+    return n;
+}
+
+/* render a bordered table as a multi-line string. `header` is a TAB-separated
+   row of column titles ("" → no header row). `rows` is newline-separated; each
+   row is TAB-separated cells. Columns auto-size to their widest cell.
+       cli_table("Name\tAge", "Ada\t36\nGrace\t45") */
+char *cli_table(const char *header, const char *rows) {
+    enum { TC = 16, TR = 128 };               /* max cols / rows */
+    char *hdr[TC]; int nhdr = 0;
+    int have_hdr = header && *header;
+    if (have_hdr) nhdr = split_into(header, '\t', hdr, TC);
+
+    char *cell[TR][TC]; int rowcols[TR]; int nrow = 0;
+    int ncol = nhdr;
+    const char *p = rows ? rows : "";
+    while (*p && nrow < TR) {
+        const char *nl = strchr(p, '\n');
+        int len = nl ? (int)(nl - p) : (int)strlen(p);
+        char *line = xmalloc(len + 1); memcpy(line, p, len); line[len] = '\0';
+        rowcols[nrow] = split_into(line, '\t', cell[nrow], TC);
+        free(line);
+        if (rowcols[nrow] > ncol) ncol = rowcols[nrow];
+        nrow++;
+        if (!nl) break;
+        p = nl + 1;
+    }
+    if (ncol == 0) {
+        for (int i = 0; i < nhdr; i++) free(hdr[i]);
+        return strdup("");
+    }
+
+    int w[TC]; for (int c = 0; c < ncol; c++) w[c] = 0;
+    if (have_hdr)
+        for (int c = 0; c < nhdr; c++) { int v = visual_len(hdr[c]); if (v > w[c]) w[c] = v; }
+    for (int r = 0; r < nrow; r++)
+        for (int c = 0; c < rowcols[r]; c++) { int v = visual_len(cell[r][c]); if (v > w[c]) w[c] = v; }
+
+    long total_w = 0;
+    for (int c = 0; c < ncol; c++) total_w += w[c] + 4;
+    size_t cap = (size_t)total_w * 3 * (nrow + 5)
+               + strlen(rows ? rows : "") * 2
+               + (have_hdr ? strlen(header) * 2 : 0) + 512;
+    char *o = xmalloc(cap); char *q = o;
+
+    #define TBL_HLINE(L,M,R) do {                                   \
+        q += sprintf(q, "%s", (L));                                 \
+        for (int c = 0; c < ncol; c++) {                            \
+            for (int i = 0; i < w[c] + 2; i++) { memcpy(q,"─",3); q += 3; } \
+            q += sprintf(q, "%s", c < ncol - 1 ? (M) : (R));        \
+        }                                                           \
+        *q++ = '\n';                                                \
+    } while (0)
+
+    TBL_HLINE("┌","┬","┐");
+    if (have_hdr) {
+        for (int c = 0; c < ncol; c++) {
+            const char *t = c < nhdr ? hdr[c] : "";
+            int fill = w[c] - visual_len(t); if (fill < 0) fill = 0;
+            q += sprintf(q, "│ \033[1m%s\033[0m%*s ", t, fill, "");
+        }
+        q += sprintf(q, "│\n");
+        TBL_HLINE("├","┼","┤");
+    }
+    for (int r = 0; r < nrow; r++) {
+        for (int c = 0; c < ncol; c++) {
+            const char *t = c < rowcols[r] ? cell[r][c] : "";
+            int fill = w[c] - visual_len(t); if (fill < 0) fill = 0;
+            q += sprintf(q, "│ %s%*s ", t, fill, "");
+        }
+        q += sprintf(q, "│\n");
+    }
+    TBL_HLINE("└","┴","┘");
+    #undef TBL_HLINE
+    if (q > o && q[-1] == '\n') q[-1] = '\0'; else *q = '\0';
+
+    for (int i = 0; i < nhdr; i++) free(hdr[i]);
+    for (int r = 0; r < nrow; r++)
+        for (int c = 0; c < rowcols[r]; c++) free(cell[r][c]);
+    return o;
 }

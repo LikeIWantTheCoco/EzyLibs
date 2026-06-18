@@ -19,12 +19,14 @@
 #  └─────────────────────────────────────────────────────────────┘
 #
 #  QUICK REFERENCE
-#   Styling    cli_color  cli_bold  cli_dim
-#   Layout     cli_divider  cli_center  cli_ljust  cli_rjust
-#   Box        cli_make_box(content, frame_color, chars, padding)
+#   Styling    cli_color  cli_bg  cli_color256  cli_rgb  cli_bold  cli_dim
+#              cli_underline  cli_italic  cli_reverse  cli_strike  cli_blink
+#   Layout     cli_divider  cli_center  cli_ljust  cli_rjust  cli_clear_line
+#   Box        cli_make_box(content, frame_color, chars, padding)  # multi-line ok
+#   Table      cli_table(header, rows)            # TAB cells, newline rows
 #   UI         cli_section  cli_title  cli_alert  cli_status  cli_badge
-#   Input      cli_ask  cli_confirm  cli_inputbox
-#   Widgets    cli_progress  cli_spinner  cli_picker
+#   Input      cli_ask  cli_ask_secret  cli_confirm  cli_inputbox
+#   Widgets    cli_progress  cli_spinner  cli_picker  cli_menu  cli_checklist
 
 # ── Reactive variables ───────────────────────────────────────────
 extern fn cli_var(name: string, value: string = "") -> string
@@ -46,14 +48,23 @@ extern fn cli_cursor_show() -> int
 extern fn cli_cursor_up(n: int) -> int
 extern fn cli_cursor_down(n: int) -> int
 extern fn cli_move(row: int, col: int) -> int
+extern fn cli_clear_line() -> int     # clear current line, return to column 1
 extern fn cli_term_width() -> int     # live terminal column count (fallback 80)
 extern fn cli_term_height() -> int    # live terminal row count    (fallback 24)
 
 # ── Styling  (return styled strings) ────────────────────────────
 # colors: red  green  yellow  blue  magenta  cyan  white  grey
 extern fn cli_color(text: string, color: string) -> string
+extern fn cli_bg(text: string, color: string) -> string       # background color
+extern fn cli_color256(text: string, code: int) -> string     # 256-palette fg (0–255)
+extern fn cli_rgb(text: string, r: int, g: int, b: int) -> string  # true-color fg
 extern fn cli_bold(text: string) -> string
 extern fn cli_dim(text: string) -> string
+extern fn cli_underline(text: string) -> string
+extern fn cli_italic(text: string) -> string
+extern fn cli_reverse(text: string) -> string
+extern fn cli_strike(text: string) -> string
+extern fn cli_blink(text: string) -> string
 
 # ── Layout helpers  (return strings) ────────────────────────────
 extern fn cli_divider(ch: string, n: int) -> string
@@ -107,6 +118,16 @@ extern fn cli_inputbox(prompt: string, width: int, frame_color: string) -> strin
 # width=0 → terminal width - 4.  frame_color="" → no color
 # answer = cli_inputbox("> ", 0, "blue")
 
+extern fn cli_ask_secret(prompt: string, mask: string = "*") -> string
+# masked prompt — does not echo input. mask="*" shows stars, "" shows nothing
+# pw = cli_ask_secret("Password: ")
+
+# ── Table  (returns a bordered multi-line string) ────────────────
+extern fn cli_table(header: string, rows: string) -> string
+# header: TAB-separated titles ("" → no header). rows: newline-separated,
+# each row TAB-separated cells. columns auto-size.
+# cli_text(cli_table("Name\tAge", "Ada\t36\nGrace\t45"))
+
 # ── Widgets  (stored in a cli_var, updated reactively) ───────────
 # picker: options = newline-separated list, dir = "vertical" | "horizontal"
 extern fn cli_picker(name: string, dir: string, options: string) -> string
@@ -128,6 +149,11 @@ extern fn cli_menu(title: string, options: string) -> int
 # returns the selected 0-based index. options = newline-separated list.
 # i = cli_menu("Pick:", "Apple\nBanana\nCherry")
 
+extern fn cli_checklist(title: string, options: string) -> string
+# multi-select: Space toggles, Enter confirms, q/Esc cancels.
+# returns the checked options as a newline-separated string ("" if none).
+# picked = cli_checklist("Toppings:", "Cheese\nHam\nOlives")
+
 # ════════════════════════════════════════════════════════════════
 #  EASY API — short, python-like helpers built on the extern fns
 #  above. Names are unprefixed for ergonomics; importing cli brings
@@ -145,6 +171,14 @@ fn magenta(s: string) -> string: { return cli_color(s, "magenta") }
 fn cyan(s: string) -> string:    { return cli_color(s, "cyan") }
 fn white(s: string) -> string:   { return cli_color(s, "white") }
 fn grey(s: string) -> string:    { return cli_color(s, "grey") }
+fn underline(s: string) -> string: { return cli_underline(s) }
+fn italic(s: string) -> string:    { return cli_italic(s) }
+fn reverse(s: string) -> string:   { return cli_reverse(s) }
+fn strike(s: string) -> string:    { return cli_strike(s) }
+fn blink(s: string) -> string:     { return cli_blink(s) }
+fn bg(s: string, color: string) -> string:    { return cli_bg(s, color) }
+fn color256(s: string, code: int) -> string:  { return cli_color256(s, code) }
+fn rgb(s: string, r: int, g: int, b: int) -> string: { return cli_rgb(s, r, g, b) }
 
 # ── Output  (print a whole line) ─────────────────────────────────
 fn say(text: string):            { cli_text(text) }              # like print, via cli
@@ -156,10 +190,13 @@ fn ok(msg: string):              { cli_text(cli_alert(msg, "success")) }
 fn rule(color: string = "grey"): { cli_text(cli_color(cli_divider("─", cli_term_width()), color)) }
 fn heading(title: string, color: string = "cyan"): { cli_text(cli_section(title, color)) }
 fn box(text: string, color: string = "cyan"):      { cli_text(cli_make_box(text, color, "", 1)) }
+fn table(header: string, rows: string):            { cli_text(cli_table(header, rows)) }
+fn clear_line():                                    { cli_clear_line() }
 
 # ── Input  (python-like prompts) ─────────────────────────────────
 fn ask(prompt: string) -> string:   { return cli_ask(prompt) }
 fn confirm(question: string) -> bool: { return cli_confirm(question) == 1 }
+fn secret(prompt: string) -> string: { return cli_ask_secret(prompt, "*") }
 
 # choose: interactive menu that returns the picked option text ("" if cancelled)
 fn choose(title: string, options: string) -> string:
@@ -171,6 +208,20 @@ fn choose(title: string, options: string) -> string:
     }
     parts = options.split("\n")
     return parts[i]
+}
+
+# multi_choose: multi-select menu, returns the picked option texts as a list
+# (empty list if cancelled or nothing checked).
+#   picks = multi_choose("Toppings:", "Cheese\nHam\nOlives")
+fn multi_choose(title: string, options: string) -> [string]:
+{
+    picked = cli_checklist(title, options)
+    if picked == "":
+    {
+        empty: [string] = []
+        return empty
+    }
+    return picked.split("\n")
 }
 
 # ── Keyboard events  (press a key → run a function) ──────────────
