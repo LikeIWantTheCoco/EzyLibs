@@ -1,0 +1,102 @@
+# ════════════════════════════════════════════════════════════════
+#  gtk  —  easy GTK3 desktop UI for Ezy
+#  import gtk
+# ════════════════════════════════════════════════════════════════
+#
+#  MINIMAL APP
+#  ┌─────────────────────────────────────────────────────────────┐
+#  │  fn on_click():                                              │
+#  │  {                                                           │
+#  │      set_text(out, "Clicked!")                              │
+#  │  }                                                           │
+#  │                                                              │
+#  │  out = 0                          # global widget handles    │
+#  │  fn main():                                                  │
+#  │  {                                                           │
+#  │      global out                                              │
+#  │      win = app("Demo", 320, 140)  # init + window            │
+#  │      col = vbox(8)                                           │
+#  │      out = label("Hello from Ezy + GTK")                    │
+#  │      btn = button("Press me")                               │
+#  │      on_click_set(btn, on_click)   # wire the callback       │
+#  │      pack(col, out, 0, 4)                                    │
+#  │      pack(col, btn, 0, 4)                                    │
+#  │      add(win, col)                                           │
+#  │      run(win)                      # show + event loop       │
+#  │  }                                                           │
+#  └─────────────────────────────────────────────────────────────┘
+#
+#  Widgets are integer handles. Signal callbacks are plain fns passed
+#  by name (no args needed). Closing the window ends run().
+
+# ── lifecycle ────────────────────────────────────────────────────
+extern fn gtk_app_init() -> int                       # gtk_init (rarely needed directly)
+extern fn gtk_app(title: string, w: int, h: int) -> int   # init + top-level window
+extern fn gtk_window(title: string, w: int, h: int) -> int
+extern fn gtk_run(win: int) -> int                    # show all + enter event loop
+extern fn gtk_quit() -> int
+extern fn gtk_show(widget: int) -> int
+extern fn gtk_hide(widget: int) -> int
+extern fn gtk_title(win: int, title: string) -> int
+
+# ── widgets ──────────────────────────────────────────────────────
+extern fn gtk_label(text: string) -> int
+extern fn gtk_button(text: string) -> int
+extern fn gtk_entry() -> int
+extern fn gtk_check(text: string) -> int
+extern fn gtk_image(path: string) -> int
+
+# ── layout ───────────────────────────────────────────────────────
+extern fn gtk_vbox(spacing: int = 0) -> int
+extern fn gtk_hbox(spacing: int = 0) -> int
+extern fn gtk_grid() -> int
+extern fn gtk_add(container: int, child: int) -> int
+extern fn gtk_pack(box: int, child: int, expand: int = 0, padding: int = 0) -> int
+extern fn gtk_attach(grid: int, child: int, col: int, row: int, wspan: int = 1, hspan: int = 1) -> int
+extern fn gtk_margin(widget: int, m: int) -> int
+
+# ── signals / text / state ───────────────────────────────────────
+extern fn gtk_on(widget: int, signal: string, cb: int) -> int   # cb = a fn value
+extern fn gtk_set_text(widget: int, text: string) -> int
+extern fn gtk_get_text(widget: int) -> string
+extern fn gtk_is_checked(widget: int) -> int
+extern fn gtk_dialog(parent: int, title: string, msg: string) -> int
+
+# ════════════════════════════════════════════════════════════════
+#  EASY API — short, ergonomic wrappers. Importing gtk brings these
+#  into scope; avoid shadowing them in your own program.
+# ════════════════════════════════════════════════════════════════
+
+# lifecycle
+fn app(title: string, w: int = 400, h: int = 300) -> int: { return gtk_app(title, w, h) }
+fn window(title: string, w: int = 400, h: int = 300) -> int: { return gtk_window(title, w, h) }
+fn run(win: int):              { gtk_run(win) }
+fn quit():                     { gtk_quit() }
+fn show(widget: int):          { gtk_show(widget) }
+fn hide(widget: int):          { gtk_hide(widget) }
+fn title(win: int, t: string): { gtk_title(win, t) }
+
+# widgets
+fn label(text: string) -> int:  { return gtk_label(text) }
+fn button(text: string) -> int: { return gtk_button(text) }
+fn entry() -> int:              { return gtk_entry() }
+fn checkbox(text: string) -> int: { return gtk_check(text) }
+fn image(path: string) -> int:  { return gtk_image(path) }
+
+# layout
+fn vbox(spacing: int = 6) -> int: { return gtk_vbox(spacing) }
+fn hbox(spacing: int = 6) -> int: { return gtk_hbox(spacing) }
+fn grid() -> int:                 { return gtk_grid() }
+fn add(container: int, child: int): { gtk_add(container, child) }
+fn pack(box: int, child: int, expand: int = 0, padding: int = 2): { gtk_pack(box, child, expand, padding) }
+fn attach(g: int, child: int, col: int, row: int): { gtk_attach(g, child, col, row, 1, 1) }
+fn margin(widget: int, m: int): { gtk_margin(widget, m) }
+
+# signals + state
+fn on(widget: int, signal: string, cb: int): { gtk_on(widget, signal, cb) }
+fn on_click_set(btn: int, cb: int):          { gtk_on(btn, "clicked", cb) }
+fn on_change(w: int, cb: int):               { gtk_on(w, "changed", cb) }
+fn set_text(widget: int, text: string):      { gtk_set_text(widget, text) }
+fn get_text(widget: int) -> string:          { return gtk_get_text(widget) }
+fn checked(widget: int) -> bool:             { return gtk_is_checked(widget) == 1 }
+fn alert(parent: int, title: string, msg: string): { gtk_dialog(parent, title, msg) }

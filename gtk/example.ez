@@ -1,0 +1,38 @@
+# Example GTK3 desktop app in Ezy.
+#   ezy run example.ez      (needs a display / X server)
+import gtk
+
+# global widget handles so callbacks can reach them
+out = 0
+name_in = 0
+clicks = 0
+
+fn on_greet():
+{
+    global out, name_in, clicks
+    clicks = clicks + 1
+    who = get_text(name_in)
+    if who == "": { who = "world" }
+    set_text(out, f"Hello, {who}!  (clicks: {clicks})")
+}
+
+fn main():
+{
+    global out, name_in
+    win = app("Ezy + GTK", 360, 180)
+
+    col = vbox(8)
+    margin(col, 12)
+
+    out = label("Type your name and press the button")
+    name_in = entry()
+    btn = button("Greet")
+    on_click_set(btn, on_greet)
+
+    pack(col, out, 0, 4)
+    pack(col, name_in, 0, 4)
+    pack(col, btn, 0, 4)
+    add(win, col)
+
+    run(win)
+}

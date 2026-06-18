@@ -1,0 +1,11 @@
+{
+  "name":         "gtk",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "Easy GTK3 desktop UI for Ezy: windows, widgets, layout, signals, dialogs",
+  "sources":      ["gtk.c"],
+  "header":       "gtk.ez",
+  "binary":       "libezygtk.so",
+  "dependencies": [],
+  "link_flags":   ["$(pkg-config --cflags --libs gtk+-3.0)"]
+}
