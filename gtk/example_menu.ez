@@ -1,0 +1,63 @@
+# Menubar + selectable list + table demo.
+#   ezy run example_menu.ez      (needs a display)
+import gtk
+
+status = 0
+lst = 0
+
+fn on_quit():  { quit() }
+fn on_about(): { alert(0, "About", "Ezy + GTK demo") }
+
+# row-selected callback reads the selection via the global list handle
+fn on_row():
+{
+    global status, lst
+    i = list_selected(lst)
+    set_text(status, f"Selected row {i}")
+}
+
+fn main():
+{
+    global status, lst
+    win = app("Menu / List / Table", 500, 400)
+    root = vbox(0)
+
+    # ── menubar: File > About / Quit ──
+    mb = menubar()
+    file_menu = menu()
+    mi_file = menu_item("File")
+    submenu(mi_file, file_menu)
+    mi_about = menu_item("About")
+    mi_quit = menu_item("Quit")
+    on_menu(mi_about, on_about)
+    on_menu(mi_quit, on_quit)
+    add(file_menu, mi_about)
+    add(file_menu, mi_quit)
+    add(mb, mi_file)
+    pack(root, mb)
+
+    body = hbox(8)
+    border(body, 8)
+
+    # ── selectable list ──
+    lst = list()
+    list_add(lst, "Apple")
+    list_add(lst, "Banana")
+    list_add(lst, "Cherry")
+    on_select_row(lst, on_row)
+
+    # ── table with columns ──
+    tbl = table("Name\tAge")
+    table_row(tbl, "Ada\t36")
+    table_row(tbl, "Grace\t45")
+    table_row(tbl, "Linus\t54")
+
+    pack(body, lst, 1)
+    pack(body, tbl, 1)
+    pack(root, body, 1)
+
+    status = label("Ready")
+    pack(root, status)
+    add(win, root)
+    run(win)
+}

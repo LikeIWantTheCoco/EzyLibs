@@ -201,7 +201,8 @@ long long gtk_slider_set(long long w, long long v) {
 /* progress bar — value is a 0..100 percentage */
 long long gtk_progressbar(void) { return (long long)(size_t)gtk_progress_bar_new(); }
 long long gtk_progressbar_set(long long w, long long percent) {
-    if (percent < 0) percent = 0; if (percent > 100) percent = 100;
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
     gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(W(w)), (double)percent / 100.0);
     return 0;
 }
@@ -301,7 +302,8 @@ long long gtk_timeout(long long ms, long long cb) {
     return 0;
 }
 
-/* load CSS for the whole app; target widgets by name (#name) or type */
+/* load CSS for the whole app; target widgets by name (#name), type, or
+   a class added with gtk_add_class (.class) */
 long long gtk_css(const char *css) {
     if (!css) return 0;
     GtkCssProvider *p = gtk_css_provider_new();
@@ -310,5 +312,94 @@ long long gtk_css(const char *css) {
         gdk_screen_get_default(), GTK_STYLE_PROVIDER(p),
         GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(p);
+    return 0;
+}
+long long gtk_add_class(long long w, const char *cls) {
+    gtk_style_context_add_class(gtk_widget_get_style_context(W(w)), cls ? cls : "");
+    return 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Lists, tables, menus
+   ═══════════════════════════════════════════════════════════════ */
+
+/* selectable list of text rows */
+long long gtk_list(void) { return (long long)(size_t)gtk_list_box_new(); }
+long long gtk_list_add(long long list, const char *text) {
+    GtkWidget *lbl = gtk_label_new(text ? text : "");
+    gtk_widget_set_halign(lbl, GTK_ALIGN_START);
+    gtk_widget_set_margin_start(lbl, 6);  gtk_widget_set_margin_end(lbl, 6);
+    gtk_list_box_insert(GTK_LIST_BOX(W(list)), lbl, -1);
+    gtk_widget_show(lbl);
+    return 0;
+}
+/* index of the selected row, or -1 */
+long long gtk_list_selected(long long list) {
+    GtkListBoxRow *r = gtk_list_box_get_selected_row(GTK_LIST_BOX(W(list)));
+    return r ? gtk_list_box_row_get_index(r) : -1;
+}
+
+/* split helper for tab-separated cells (up to `max`); returns count */
+static int gtk_tab_split(const char *s, char **out, int max) {
+    int n = 0;
+    const char *p = s ? s : "";
+    for (;;) {
+        if (n >= max) break;
+        const char *e = strchr(p, '\t');
+        int len = e ? (int)(e - p) : (int)strlen(p);
+        char *o = (char *)malloc((size_t)len + 1);
+        memcpy(o, p, (size_t)len); o[len] = '\0';
+        out[n++] = o;
+        if (!e) break;
+        p = e + 1;
+    }
+    return n;
+}
+
+/* table (tree view) — `headers` is a TAB-separated list of column titles;
+   each column holds text. Add rows with gtk_table_row. */
+long long gtk_table(const char *headers) {
+    char *cols[32];
+    int ncol = gtk_tab_split(headers, cols, 32);
+    if (ncol < 1) ncol = 1;
+    GType types[32];
+    for (int i = 0; i < ncol; i++) types[i] = G_TYPE_STRING;
+    GtkListStore *store = gtk_list_store_newv(ncol, types);
+    GtkWidget *tv = gtk_tree_view_new_with_model(GTK_TREE_MODEL(store));
+    g_object_unref(store);
+    for (int i = 0; i < ncol; i++) {
+        GtkCellRenderer *rend = gtk_cell_renderer_text_new();
+        GtkTreeViewColumn *col = gtk_tree_view_column_new_with_attributes(
+            cols[i] ? cols[i] : "", rend, "text", i, NULL);
+        gtk_tree_view_append_column(GTK_TREE_VIEW(tv), col);
+        free(cols[i]);
+    }
+    return (long long)(size_t)tv;
+}
+/* append a row; `cells` is TAB-separated, one value per column */
+long long gtk_table_row(long long tv, const char *cells) {
+    GtkTreeModel *m = gtk_tree_view_get_model(GTK_TREE_VIEW(W(tv)));
+    GtkListStore *store = GTK_LIST_STORE(m);
+    int ncol = gtk_tree_model_get_n_columns(m);
+    char *vals[32];
+    int n = gtk_tab_split(cells, vals, ncol < 32 ? ncol : 32);
+    GtkTreeIter it;
+    gtk_list_store_append(store, &it);
+    for (int i = 0; i < n; i++) {
+        gtk_list_store_set(store, &it, i, vals[i], -1);
+        free(vals[i]);
+    }
+    return 0;
+}
+
+/* menus: build a menubar, add menus (via top-level items), add items to menus */
+long long gtk_menubar(void)   { return (long long)(size_t)gtk_menu_bar_new(); }
+long long gtk_menu(void)      { return (long long)(size_t)gtk_menu_new(); }
+long long gtk_menu_item(const char *label) {
+    return (long long)(size_t)gtk_menu_item_new_with_label(label ? label : "");
+}
+/* attach `menu` as the dropdown of a top-level `item` */
+long long gtk_menu_sub(long long item, long long menu) {
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(W(item)), W(menu));
     return 0;
 }

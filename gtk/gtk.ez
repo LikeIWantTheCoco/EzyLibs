@@ -109,6 +109,18 @@ extern fn gtk_label_markup(l: int, markup: string) -> int
 extern fn gtk_label_wrap(l: int, on: int) -> int
 extern fn gtk_timeout(ms: int, cb: int) -> int        # repeat cb; cb returns 1=keep 0=stop
 extern fn gtk_css(css: string) -> int                 # app-wide CSS styling
+extern fn gtk_add_class(w: int, cls: string) -> int   # CSS class for .class selectors
+
+# ── lists, tables, menus ─────────────────────────────────────────
+extern fn gtk_list() -> int                           # selectable list of text rows
+extern fn gtk_list_add(list: int, text: string) -> int
+extern fn gtk_list_selected(list: int) -> int         # selected row index, -1 if none
+extern fn gtk_table(headers: string) -> int           # TAB-separated column titles
+extern fn gtk_table_row(tv: int, cells: string) -> int  # TAB-separated cell values
+extern fn gtk_menubar() -> int
+extern fn gtk_menu() -> int
+extern fn gtk_menu_item(label: string) -> int
+extern fn gtk_menu_sub(item: int, menu: int) -> int   # set `menu` as `item`'s dropdown
 
 # ════════════════════════════════════════════════════════════════
 #  EASY API — short, ergonomic wrappers. Importing gtk brings these
@@ -197,3 +209,17 @@ fn markup(l: int, m: string):                { gtk_label_markup(l, m) }
 fn wrap(l: int):                             { gtk_label_wrap(l, 1) }
 fn every(ms: int, cb: int):                  { gtk_timeout(ms, cb) }
 fn css(style: string):                       { gtk_css(style) }
+fn add_class(w: int, cls: string):           { gtk_add_class(w, cls) }
+
+# lists, tables, menus
+fn list() -> int:                            { return gtk_list() }
+fn list_add(l: int, text: string):           { gtk_list_add(l, text) }
+fn list_selected(l: int) -> int:             { return gtk_list_selected(l) }
+fn on_select_row(l: int, cb: int):           { gtk_on(l, "row-selected", cb) }
+fn table(headers: string) -> int:            { return gtk_table(headers) }
+fn table_row(t: int, cells: string):         { gtk_table_row(t, cells) }
+fn menubar() -> int:                         { return gtk_menubar() }
+fn menu() -> int:                            { return gtk_menu() }
+fn menu_item(label: string) -> int:          { return gtk_menu_item(label) }
+fn submenu(item: int, m: int):               { gtk_menu_sub(item, m) }
+fn on_menu(item: int, cb: int):              { gtk_on(item, "activate", cb) }
