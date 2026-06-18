@@ -62,6 +62,54 @@ extern fn gtk_get_text(widget: int) -> string
 extern fn gtk_is_checked(widget: int) -> int
 extern fn gtk_dialog(parent: int, title: string, msg: string) -> int
 
+# ── extended widgets ─────────────────────────────────────────────
+extern fn gtk_scrolled() -> int                       # scrollable container (add one child)
+extern fn gtk_textview() -> int                       # multi-line text area
+extern fn gtk_tv_set_text(w: int, text: string) -> int
+extern fn gtk_tv_get_text(w: int) -> string
+extern fn gtk_combo() -> int                          # dropdown
+extern fn gtk_combo_add(c: int, text: string) -> int
+extern fn gtk_combo_index(c: int) -> int
+extern fn gtk_combo_select(c: int, i: int) -> int
+extern fn gtk_combo_text(c: int) -> string
+extern fn gtk_spin(min: int, max: int, step: int = 1) -> int   # numeric spinner
+extern fn gtk_spin_get(w: int) -> int
+extern fn gtk_spin_set(w: int, v: int) -> int
+extern fn gtk_slider(min: int, max: int, step: int = 1) -> int # horizontal scale
+extern fn gtk_slider_get(w: int) -> int
+extern fn gtk_slider_set(w: int, v: int) -> int
+extern fn gtk_progressbar() -> int
+extern fn gtk_progressbar_set(w: int, percent: int) -> int     # 0..100
+extern fn gtk_radio(group: int, text: string) -> int           # group=0 → new group
+extern fn gtk_toggle(text: string) -> int
+extern fn gtk_set_checked(w: int, on: int) -> int
+extern fn gtk_frame(label: string) -> int
+extern fn gtk_separator(horizontal: int = 1) -> int
+extern fn gtk_notebook() -> int
+extern fn gtk_notebook_add(nb: int, child: int, tab: string) -> int
+extern fn gtk_spinner() -> int
+extern fn gtk_spinner_run(w: int) -> int
+extern fn gtk_spinner_halt(w: int) -> int
+extern fn gtk_file_open(parent: int, title: string) -> string  # "" if cancelled
+extern fn gtk_file_save(parent: int, title: string) -> string
+
+# ── widget / window properties ───────────────────────────────────
+extern fn gtk_set_sensitive(w: int, on: int) -> int
+extern fn gtk_set_visible(w: int, on: int) -> int
+extern fn gtk_set_tooltip(w: int, text: string) -> int
+extern fn gtk_set_size(w: int, width: int, height: int) -> int
+extern fn gtk_set_expand(w: int, h: int, v: int) -> int
+extern fn gtk_set_name(w: int, name: string) -> int
+extern fn gtk_border(container: int, px: int) -> int
+extern fn gtk_resizable(win: int, on: int) -> int
+extern fn gtk_fullscreen(win: int) -> int
+extern fn gtk_entry_placeholder(e: int, text: string) -> int
+extern fn gtk_entry_password(e: int, on: int) -> int
+extern fn gtk_label_markup(l: int, markup: string) -> int
+extern fn gtk_label_wrap(l: int, on: int) -> int
+extern fn gtk_timeout(ms: int, cb: int) -> int        # repeat cb; cb returns 1=keep 0=stop
+extern fn gtk_css(css: string) -> int                 # app-wide CSS styling
+
 # ════════════════════════════════════════════════════════════════
 #  EASY API — short, ergonomic wrappers. Importing gtk brings these
 #  into scope; avoid shadowing them in your own program.
@@ -99,4 +147,53 @@ fn on_change(w: int, cb: int):               { gtk_on(w, "changed", cb) }
 fn set_text(widget: int, text: string):      { gtk_set_text(widget, text) }
 fn get_text(widget: int) -> string:          { return gtk_get_text(widget) }
 fn checked(widget: int) -> bool:             { return gtk_is_checked(widget) == 1 }
+fn set_checked(widget: int, on: bool):       { gtk_set_checked(widget, on ? 1 : 0) }
 fn alert(parent: int, title: string, msg: string): { gtk_dialog(parent, title, msg) }
+
+# extended widgets
+fn scrollable() -> int:                      { return gtk_scrolled() }
+fn textarea() -> int:                        { return gtk_textview() }
+fn get_textarea(w: int) -> string:           { return gtk_tv_get_text(w) }
+fn set_textarea(w: int, text: string):       { gtk_tv_set_text(w, text) }
+fn dropdown() -> int:                        { return gtk_combo() }
+fn option(c: int, text: string):             { gtk_combo_add(c, text) }
+fn selected(c: int) -> int:                  { return gtk_combo_index(c) }
+fn selected_text(c: int) -> string:          { return gtk_combo_text(c) }
+fn set_selected(c: int, i: int):             { gtk_combo_select(c, i) }
+fn spinner_num(min: int, max: int, step: int = 1) -> int: { return gtk_spin(min, max, step) }
+fn spin_value(w: int) -> int:                { return gtk_spin_get(w) }
+fn set_spin(w: int, v: int):                 { gtk_spin_set(w, v) }
+fn slider(min: int, max: int, step: int = 1) -> int: { return gtk_slider(min, max, step) }
+fn slider_value(w: int) -> int:              { return gtk_slider_get(w) }
+fn set_slider(w: int, v: int):               { gtk_slider_set(w, v) }
+fn progress() -> int:                        { return gtk_progressbar() }
+fn set_progress(w: int, percent: int):       { gtk_progressbar_set(w, percent) }
+fn radio(group: int, text: string) -> int:   { return gtk_radio(group, text) }
+fn toggle(text: string) -> int:              { return gtk_toggle(text) }
+fn frame(label: string) -> int:              { return gtk_frame(label) }
+fn hsep() -> int:                            { return gtk_separator(1) }
+fn vsep() -> int:                            { return gtk_separator(0) }
+fn notebook() -> int:                        { return gtk_notebook() }
+fn tab(nb: int, child: int, name: string):   { gtk_notebook_add(nb, child, name) }
+fn busy() -> int:                            { return gtk_spinner() }
+fn busy_on(w: int):                          { gtk_spinner_run(w) }
+fn busy_off(w: int):                         { gtk_spinner_halt(w) }
+fn open_file(parent: int, title: string = "Open") -> string: { return gtk_file_open(parent, title) }
+fn save_file(parent: int, title: string = "Save") -> string: { return gtk_file_save(parent, title) }
+
+# properties
+fn enable(w: int):                           { gtk_set_sensitive(w, 1) }
+fn disable(w: int):                          { gtk_set_sensitive(w, 0) }
+fn tooltip(w: int, text: string):            { gtk_set_tooltip(w, text) }
+fn size(w: int, width: int, height: int):    { gtk_set_size(w, width, height) }
+fn expand(w: int):                           { gtk_set_expand(w, 1, 1) }
+fn name(w: int, id: string):                 { gtk_set_name(w, id) }
+fn border(container: int, px: int):          { gtk_border(container, px) }
+fn resizable(win: int, on: bool):            { gtk_resizable(win, on ? 1 : 0) }
+fn fullscreen(win: int):                     { gtk_fullscreen(win) }
+fn placeholder(e: int, text: string):        { gtk_entry_placeholder(e, text) }
+fn password(e: int):                         { gtk_entry_password(e, 1) }
+fn markup(l: int, m: string):                { gtk_label_markup(l, m) }
+fn wrap(l: int):                             { gtk_label_wrap(l, 1) }
+fn every(ms: int, cb: int):                  { gtk_timeout(ms, cb) }
+fn css(style: string):                       { gtk_css(style) }

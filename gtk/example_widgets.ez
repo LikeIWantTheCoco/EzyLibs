@@ -1,0 +1,75 @@
+# Showcase of the extended GTK widgets: tabs, dropdown, spin, slider,
+# toggle, scrollable text area, progress bar driven by a timer.
+#   ezy run example_widgets.ez      (needs a display)
+import gtk
+
+log = 0
+prog = 0
+pct = 0
+
+# repeating timer callback: advance the progress bar (return 1 = keep firing)
+fn tick() -> int:
+{
+    global prog, pct
+    pct = pct + 10
+    if pct > 100: { pct = 0 }
+    set_progress(prog, pct)
+    return 1
+}
+
+fn on_run():
+{
+    global log
+    set_textarea(log, "Button pressed.\nThe text area scrolls when it overflows.")
+}
+
+fn main():
+{
+    global log, prog
+    win = app("Widgets Demo", 480, 420)
+    nb = notebook()
+
+    # ── tab 1: a form ──
+    form = vbox(6)
+    border(form, 10)
+    name_in = entry()
+    placeholder(name_in, "your name")
+    colors = dropdown()
+    option(colors, "Red")
+    option(colors, "Green")
+    option(colors, "Blue")
+    set_selected(colors, 0)
+    amount = spinner_num(0, 10, 1)
+    volume = slider(0, 100, 5)
+    enabled = toggle("Enable")
+    run_btn = button("Run")
+    on_click_set(run_btn, on_run)
+    tooltip(run_btn, "Run the action")
+    pack(form, label("Form widgets:"))
+    pack(form, name_in)
+    pack(form, colors)
+    pack(form, amount)
+    pack(form, volume)
+    pack(form, enabled)
+    pack(form, run_btn)
+    tab(nb, form, "Form")
+
+    # ── tab 2: scrollable text + progress bar ──
+    page = vbox(6)
+    border(page, 10)
+    sw = scrollable()
+    log = textarea()
+    set_textarea(log, "Scrollable text area.\nResize the window to see scrollbars.")
+    add(sw, log)
+    expand(sw)
+    prog = progress()
+    set_progress(prog, 30)
+    pack(page, sw, 1)
+    pack(page, hsep())
+    pack(page, prog)
+    tab(nb, page, "Text")
+
+    add(win, nb)
+    every(300, tick)        # animate the progress bar
+    run(win)
+}
