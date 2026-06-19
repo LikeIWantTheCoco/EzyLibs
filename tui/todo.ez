@@ -1,0 +1,91 @@
+# Demo TODO app built on the tui framework.
+#   ezy run todo.ez
+# Keys:  j/k move   x toggle done   a add   c clear done   q quit
+#include "tui.ez"
+
+# ── app domain state (the framework owns flow; the app owns its data) ──
+tasks: [string] = []
+done: [int] = []
+sel = 0
+counter = 0
+
+fn render_list() -> string:
+{
+    out = cli_make_box(cli_bold("Ezy TUI — TODO"), "cyan", "", 0) + "\n\n"
+    n = tasks.len()
+    if n == 0:
+    {
+        out = out + cli_dim("  (no tasks — press 'a' to add)") + "\n"
+    }
+    i = 0
+    while i < n:
+    {
+        mark = "[ ]"
+        if done[i] == 1: { mark = "[x]" }
+        if i == sel:
+        {
+            out = out + cli_color("❯ " + mark + " " + tasks[i], "yellow") + "\n"
+        }
+        else:
+        {
+            out = out + "  " + mark + " " + tasks[i] + "\n"
+        }
+        i = i + 1
+    }
+    out = out + "\n" + cli_dim("[j/k] move  [x] toggle  [a] add  [c] clear done  [q] quit")
+    return out
+}
+
+fn list_keys(k: string):
+{
+    global sel, counter, tasks, done
+    n = tasks.len()
+    if k == "j":
+    {
+        if sel < n - 1: { sel = sel + 1 }
+    }
+    elif k == "k":
+    {
+        if sel > 0: { sel = sel - 1 }
+    }
+    elif k == "x":
+    {
+        if n > 0: { done[sel] = 1 - done[sel] }
+    }
+    elif k == "a":
+    {
+        counter = counter + 1
+        tasks.push("Task " + str(counter))
+        done.push(0)
+        sel = tasks.len() - 1
+    }
+    elif k == "c":
+    {
+        newt: [string] = []
+        newd: [int] = []
+        i = 0
+        while i < tasks.len():
+        {
+            if done[i] == 0:
+            {
+                newt.push(tasks[i])
+                newd.push(done[i])
+            }
+            i = i + 1
+        }
+        tasks = newt
+        done = newd
+        if sel >= tasks.len(): { sel = tasks.len() - 1 }
+        if sel < 0: { sel = 0 }
+    }
+}
+
+fn goodbye(): { cli_text("bye!") }
+
+fn main():
+{
+    screen("list", render_list, list_keys)
+    keybind("q", quit)
+    on_exit(goodbye)
+    run("list")
+}

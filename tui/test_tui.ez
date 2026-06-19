@@ -1,0 +1,59 @@
+# Tests for the tui framework: screen registry, navigation, render dispatch,
+# and the state store — exercised directly (without the blocking event loop).
+#   ezy run test_tui.ez
+#include "tui.ez"
+
+fails = 0
+fn check(name: string, cond: bool):
+{
+    global fails
+    if cond: { print("  PASS " + name) }
+    else:    { print("  FAIL " + name)  fails = fails + 1 }
+}
+
+fn screen_a() -> string: { return "SCREEN A" }
+fn screen_b() -> string: { return "SCREEN B" }
+fn screen_c() -> string: { return "SCREEN C" }
+fn nokeys(k: string): {}
+
+fn main():
+{
+    # ── screen registry + render dispatch (typed fn pointers via arrays) ──
+    screen("a", screen_a, nokeys)
+    screen("b", screen_b, nokeys)
+    screen("c", screen_c, nokeys)
+
+    navigate("a")
+    check("render_a", _render_current() == "SCREEN A")
+    navigate("c")
+    check("render_c", _render_current() == "SCREEN C")
+    navigate("missing")                 # unknown name → stays put
+    check("nav_unknown", _render_current() == "SCREEN C")
+
+    # ── navigation stack ──
+    navigate("a")
+    push("b")
+    check("push", _render_current() == "SCREEN B")
+    push("c")
+    check("push2", _render_current() == "SCREEN C")
+    back()
+    check("back", _render_current() == "SCREEN B")
+    back()
+    check("back2", _render_current() == "SCREEN A")
+
+    # ── string state store ──
+    state_set("user", "Ada")
+    check("state_str", state_get("user") == "Ada")
+    state_set("user", "Grace")          # overwrite existing key
+    check("state_overwrite", state_get("user") == "Grace")
+    check("state_missing", state_get("nope") == "")
+
+    # ── int convenience over the store ──
+    state_set_int("count", 41)
+    check("state_int", state_get_int("count") == 41)
+    state_set_int("count", state_get_int("count") + 1)
+    check("state_int_inc", state_get_int("count") == 42)
+
+    if fails > 0: { exit(1) }
+    print("test_tui: OK")
+}

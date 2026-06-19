@@ -1,0 +1,218 @@
+# ════════════════════════════════════════════════════════════════
+#  tui  —  a tiny TUI application framework for Ezy
+#  #include "tui.ez"   (built on the cli library)
+# ════════════════════════════════════════════════════════════════
+#
+#  The framework owns the event loop (inversion of control). You register
+#  SCREENS — each a render function fn() -> string and a key handler
+#  fn(string) — then call run(start). The loop renders the active screen,
+#  reads a key, dispatches it, and re-renders.
+#
+#      fn home() -> string: { return "Hello\n[q] quit" }
+#      fn home_keys(k: string): { if k == "n": { navigate("next") } }
+#
+#      fn main():
+#      {
+#          screen("home", home, home_keys)
+#          keybind("q", quit)         # global keybinding
+#          run("home")
+#      }
+#
+#  STATE: lambdas don't capture, so screens read shared state from globals
+#  or from the framework's string store (state_set / state_get).
+
+import cli
+
+# ── framework globals ────────────────────────────────────────────
+_running = false
+_dirty = true
+_cur = 0                              # active screen index
+
+_screen_names: [string] = []
+_screen_render: [int] = []            # fn() -> string  (stored as pointers)
+_screen_key: [int] = []               # fn(string)
+_nav: [int] = []                      # navigation stack of screen indices
+
+_bind_keys: [string] = []             # global key bindings
+_bind_fns: [int] = []                 # fn()
+
+_state_keys: [string] = []            # simple string key-value store
+_state_vals: [string] = []
+
+_on_exit_fn = 0                       # optional fn() run when the loop ends
+_has_exit = false
+
+# ── screen registry ──────────────────────────────────────────────
+# register a screen: a render fn() -> string and a key handler fn(string)
+fn screen(name: string, render: fn() -> string, on_key: fn(string)):
+{
+    _screen_names.push(name)
+    _screen_render.push(render)
+    _screen_key.push(on_key)
+}
+
+fn _find(name: string) -> int:
+{
+    i = 0
+    n = _screen_names.len()
+    while i < n:
+    {
+        if _screen_names[i] == name: { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+# ── navigation ───────────────────────────────────────────────────
+fn navigate(name: string):
+{
+    global _cur, _dirty
+    idx = _find(name)
+    if idx >= 0:
+    {
+        _cur = idx
+        _dirty = true
+    }
+}
+
+fn push(name: string):                # remember current, then navigate
+{
+    _nav.push(_cur)
+    navigate(name)
+}
+
+fn back():                            # return to the previous screen
+{
+    global _cur, _dirty
+    if _nav.len() > 0:
+    {
+        _cur = _nav.pop()
+        _dirty = true
+    }
+}
+
+# ── string state store (for simple shared values) ────────────────
+fn state_set(key: string, val: string):
+{
+    global _dirty
+    i = 0
+    n = _state_keys.len()
+    while i < n:
+    {
+        if _state_keys[i] == key:
+        {
+            _state_vals[i] = val
+            _dirty = true
+            return
+        }
+        i = i + 1
+    }
+    _state_keys.push(key)
+    _state_vals.push(val)
+    _dirty = true
+}
+
+fn state_get(key: string) -> string:
+{
+    i = 0
+    n = _state_keys.len()
+    while i < n:
+    {
+        if _state_keys[i] == key: { return _state_vals[i] }
+        i = i + 1
+    }
+    return ""
+}
+
+# integer convenience over the string store
+fn state_set_int(key: string, val: int): { state_set(key, str(val)) }
+fn state_get_int(key: string) -> int:    { return state_get(key).to_int().unwrap_or(0) }
+
+# ── keybindings + lifecycle ──────────────────────────────────────
+fn keybind(key: string, f: fn()):       # global key → action
+{
+    _bind_keys.push(key)
+    _bind_fns.push(f)
+}
+
+fn on_exit(f: fn()):
+{
+    global _on_exit_fn, _has_exit
+    _on_exit_fn = f
+    _has_exit = true
+}
+
+fn quit():
+{
+    global _running
+    _running = false
+}
+
+fn mark_dirty():
+{
+    global _dirty
+    _dirty = true
+}
+
+# ── internals: render + dispatch ─────────────────────────────────
+fn _render_current() -> string:
+{
+    f: fn() -> string = _screen_render[_cur]
+    return f()
+}
+
+fn _dispatch(key: string):
+{
+    # global bindings first
+    i = 0
+    nb = _bind_keys.len()
+    while i < nb:
+    {
+        if _bind_keys[i] == key:
+        {
+            bf: fn() = _bind_fns[i]
+            bf()
+        }
+        i = i + 1
+    }
+    # then the active screen's key handler
+    kf: fn(string) = _screen_key[_cur]
+    kf(key)
+}
+
+# ── main loop (inversion of control) ─────────────────────────────
+fn run(start: string):
+{
+    global _running, _dirty
+    navigate(start)
+    _running = true
+    cli_cursor_hide()
+    while _running:
+    {
+        if _dirty:
+        {
+            cli_clear()
+            cli_text(_render_current())
+            _dirty = false
+        }
+        k = cli_read_key()
+        if k == "":                   # EOF / input closed → exit
+        {
+            _running = false
+        }
+        else:
+        {
+            _dispatch(k)
+            _dirty = true             # re-render after every key
+        }
+    }
+    cli_cursor_show()
+    if _has_exit:
+    {
+        ef: fn() = _on_exit_fn
+        ef()
+    }
+}
+
+# a no-op key handler for screens that ignore input
+fn ignore_keys(k: string): {}
