@@ -67,7 +67,7 @@ is **no `.wasm` file and no web server needed** — just open the HTML:
 ```jsx
 import { useState } from 'react';
 import { useEzy } from './ezy-react.js';
-import EzyModule from './counter.js';        // ezy compile --release --platform web
+import EzyModule from './counter.js';        // ezy compile --release --platform web-esm
 
 function Counter() {
   const ezy = useEzy(EzyModule);             // null until the wasm loads

@@ -1,31 +1,35 @@
-/* ezyjs — React binding.
- *
- *   import { useEzy } from 'ezyjs/ezy-react';
- *   import EzyModule from './counter.js';   // ezy compile --platform web ...
- *
- *   function Counter() {
- *     const ezy = useEzy(EzyModule);          // null until the wasm is ready
- *     const [n, setN] = React.useState(1);
- *     if (!ezy) return <p>Loading…</p>;
- *     return <button onClick={() => setN(ezy.call('bump'))}>{n}</button>;
- *   }
- *
- * useEzy loads the Ezy wasm module once and returns the same { call } object
- * ezy.js gives you (or null while loading). Works with any React 16.8+ /
- * bundler (Vite, webpack, Next, …).
- */
+// ezyjs — React binding (self-contained ESM; works with any bundler).
+//
+//   import { useEzy } from './ezy-react.js';
+//   import EzyModule  from './counter.js';   // ezy compile --release --platform web
+//
+//   const ezy = useEzy(EzyModule);           // null until the wasm is ready
+//   ezy.call('bump');                         // runs the exported Ezy function
 import { useState, useEffect } from 'react';
-import Ezy from './ezy.js';
+
+// wrap an emscripten MODULARIZE/ESM factory into { call(fn, ...args) }.
+// Ezy ints are 64-bit → marshalled as BigInt, returned as Number.
+export async function loadEzy(factory) {
+  const m = await factory();
+  return {
+    call(fn, ...args) {
+      const f = m['_' + fn];
+      if (!f) throw new Error('ezy: exported fn not found: ' + fn);
+      const r = f(...args.map((a) => (typeof a === 'number' ? BigInt(a) : a)));
+      return typeof r === 'bigint' ? Number(r) : r;
+    },
+    module: m,
+  };
+}
 
 export function useEzy(factory) {
   const [app, setApp] = useState(null);
   useEffect(() => {
     let live = true;
-    Ezy.wasm(factory).then((a) => { if (live) setApp(a); });
+    loadEzy(factory).then((a) => { if (live) setApp(a); });
     return () => { live = false; };
   }, [factory]);
   return app;
 }
 
-export { Ezy };
 export default useEzy;
