@@ -49,12 +49,14 @@ fn add(a: int, b: int) -> int: { return a + b }
 ezy compile --release --platform web math.ez -o math   # → math.js (16K) + math.wasm (12K)
 ```
 
+The web build is a single self-contained `.js` (the wasm is embedded), so there
+is **no `.wasm` file and no web server needed** — just open the HTML:
+
 ```html
-<script src="math.js"></script>         <!-- defines EzyModule (a factory) -->
-<script type="module">
-  import Ezy from './ezy.js';
-  const app = await Ezy.wasm(EzyModule);
-  console.log(app.call('add', 2, 3));    // 5
+<script src="math.js"></script>     <!-- EzyModule factory, wasm embedded -->
+<script src="ezy.js"></script>
+<script>
+  Ezy.wasm(EzyModule).then((app) => console.log(app.call('add', 2, 3)));  // 5
 </script>
 ```
 
