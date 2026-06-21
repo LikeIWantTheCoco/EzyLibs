@@ -3,7 +3,7 @@
   "version":      "1.0.0",
   "type":         "tool",
   "description":  "JS <-> Ezy connection library (Node RPC bridge + browser wasm wrapper) + ezy-js CLI",
-  "assets":       ["ezy.js", "bridge.ez"],
+  "assets":       ["ezy.js", "ezy-react.js", "bridge.ez"],
   "cli":          "ezy-js",
   "tool_source":  "ezy-js.sh",
   "dependencies": []

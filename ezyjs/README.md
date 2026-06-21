@@ -60,6 +60,26 @@ is **no `.wasm` file and no web server needed** — just open the HTML:
 </script>
 ```
 
+## React
+
+`ezy-react.js` gives a `useEzy` hook (works with Vite / CRA / Next, React 16.8+):
+
+```jsx
+import { useState } from 'react';
+import { useEzy } from './ezy-react.js';
+import EzyModule from './counter.js';        // ezy compile --release --platform web
+
+function Counter() {
+  const ezy = useEzy(EzyModule);             // null until the wasm loads
+  const [n, setN] = useState(1);
+  if (!ezy) return <p>Loading…</p>;
+  return <button onClick={() => setN(Number(ezy.call('bump')))}>{n}</button>;
+}
+```
+
+`ezy-js init` drops `ezy.js` + `ezy-react.js` into your project. See
+`examples/react_counter/` (a bundler component + a zero-build CDN page).
+
 ## Notes
 
 - Ezy `int` is 64-bit → it crosses the JS boundary as `BigInt`; `ezy.js` marshals

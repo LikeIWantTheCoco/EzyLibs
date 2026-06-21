@@ -4,7 +4,9 @@ LIB="$HOME/.ezy/libs/ezyjs"
 
 case "$1" in
   init)
-    cp "$LIB/ezy.js" ./ezy.js && echo "ezy-js: ezy.js copied into $(pwd)"
+    cp "$LIB/ezy.js" ./ezy.js
+    cp "$LIB/ezy-react.js" ./ezy-react.js
+    echo "ezy-js: ezy.js + ezy-react.js copied into $(pwd)"
     ;;
   bridge)
     cp "$LIB/bridge.ez" ./bridge.ez && echo "ezy-js: bridge.ez copied into $(pwd)"
