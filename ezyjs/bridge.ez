@@ -1,0 +1,63 @@
+# ezyjs bridge — Ezy side (Node/desktop RPC server)
+#   #include "bridge.ez"
+#
+# Register handlers, then rpc_serve() reads one request per line from stdin and
+# writes one result line to stdout (the ezy.js Node bridge speaks this).
+#
+#   Protocol:  request  "<fn> <a> <b> ...\n"   (space-separated int args)
+#              response "<int>\n"   or   "ERR\n"
+#
+# Handlers have a uniform signature: fn(args: [int]) -> int
+#
+#   fn bump(args: [int]) -> int: { global n  n = n + 1  return n }
+#   fn main(): { rpc_register("bump", bump)  rpc_serve() }
+
+_rpc_names: [string] = []
+_rpc_fns: [int] = []                          # fn([int]) -> int, stored as pointers
+
+fn rpc_register(name: string, handler: fn([int]) -> int):
+{
+    _rpc_names.push(name)
+    _rpc_fns.push(handler)
+}
+
+fn _rpc_find(name: string) -> int:
+{
+    i = 0
+    while i < _rpc_names.len():
+    {
+        if _rpc_names[i] == name: { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+# blocking request/response loop over stdin/stdout
+fn rpc_serve():
+{
+    while true:
+    {
+        line = input()
+        if line == "": { return }             # EOF: peer closed the pipe
+        parts = line.split(" ")
+        name = parts[0]
+        args: [int] = []
+        i = 1
+        while i < parts.len():
+        {
+            args.push(parts[i].to_int().unwrap_or(0))
+            i = i + 1
+        }
+        idx = _rpc_find(name)
+        if idx >= 0:
+        {
+            h: fn([int]) -> int = _rpc_fns[idx]
+            print(str(h(args)))
+        }
+        else:
+        {
+            print("ERR")
+        }
+        flush()                               # push the response now (stdout is piped)
+    }
+}

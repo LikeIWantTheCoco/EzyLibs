@@ -1,0 +1,7 @@
+# wasm demo (no DOM): plain exported functions, called from JS via ezy.js.
+# (The wasm path calls the real function signature; the Node bridge uses
+#  array-handlers + rpc_serve instead.)
+n = 1
+fn bump() -> int:            { global n  n = n + 1  return n }
+fn add(a: int, b: int) -> int: { return a + b }
+fn main(): { js("console.log('Ezy wasm module ready')") }
