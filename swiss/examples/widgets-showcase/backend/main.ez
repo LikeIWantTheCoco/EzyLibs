@@ -1,0 +1,2 @@
+n = 0
+fn counter() -> int: { global n  n = n + 1  return n }

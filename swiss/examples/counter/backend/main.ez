@@ -1,0 +1,15 @@
+# Swiss backend — plain native-typed Ezy functions. The SAME signatures serve
+# every target: web types a wasm ccall, gtk calls them directly in-process.
+# Call them from the frontend with  ezy.call('name', ...args).
+#
+# No `fn main` here (Swiss provides the entry point on each target). Native
+# EzyLibs (json/sqlite) link on gtk but not on the wasm/web target yet.
+
+count = 0
+
+fn bump() -> int:
+{
+    global count
+    count = count + 1
+    return count
+}

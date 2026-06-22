@@ -1,0 +1,32 @@
+// Swiss — public entry. `import { render, View, Text, ezy, ... } from 'swiss'`.
+//
+// Picks the platform HostConfig (web here) and exposes one renderer, the
+// component primitives, StyleSheet, and the `ezy` backend singleton.
+//
+// render(<App/>, container, { backend, sigs }) — if a backend (emscripten
+// factory) is given, Swiss loads the wasm and wires `ezy` BEFORE mounting, so
+// `ezy.call(...)` is synchronous everywhere the App uses it. The same App.jsx
+// runs on the gtk target, where the translator compiles `ezy.call` to a direct
+// C call instead.
+import { makeRenderer } from './swiss-reconciler.js';
+import webHost from './swiss-host-web.js';
+import { ezy, setBackend, connectEzy } from './swiss-bridge.js';
+
+const renderer = makeRenderer(webHost);
+
+export function render(element, container, opts) {
+  if (opts && opts.backend) {
+    connectEzy(opts.backend, opts.sigs || {}).then((impl) => {
+      setBackend(impl);
+      renderer.render(element, container);
+    });
+    return;
+  }
+  renderer.render(element, container);
+}
+
+export { ezy } from './swiss-bridge.js';
+export { View, Text, Button, Input, FlatList, ScrollView } from './swiss-components.js';
+export { StyleSheet } from './swiss-stylesheet.js';
+
+export default { render, ezy };

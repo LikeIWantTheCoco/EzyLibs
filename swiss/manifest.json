@@ -1,0 +1,21 @@
+{
+  "name":         "swiss",
+  "version":      "0.1.0",
+  "type":         "tool",
+  "description":  "Swiss — one React/JSX frontend + Ezy backend, many native targets. v0.1: web target (custom react-reconciler → DOM) + ezy.call bridge + swiss CLI.",
+  "assets": [
+    "swiss.js",
+    "swiss-reconciler.js",
+    "swiss-host-web.js",
+    "swiss-components.js",
+    "swiss-stylesheet.js",
+    "swiss-bridge.js",
+    "swiss-gtkc.mjs",
+    "swiss-sig.mjs",
+    "swiss-winsdk.mjs",
+    "swiss-winshim.c"
+  ],
+  "cli":          "swiss",
+  "tool_source":  "swiss.sh",
+  "dependencies": []
+}

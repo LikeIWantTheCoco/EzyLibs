@@ -1,0 +1,79 @@
+import "sqlite"
+
+db = 0
+ids: [int] = []
+names: [string] = []
+prices: [int] = []
+dbdir = "."
+
+fn open_db():
+{
+    global db
+    if db != 0: { return }
+    db = sqlite_open(dbdir + "/products.db")
+    sqlite_exec(db, "CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, price INTEGER)")
+}
+
+fn set_db_dir(path: string) -> int:
+{
+    global dbdir, db
+    dbdir = path
+    if db != 0: { sqlite_close(db) db = 0 }
+    open_db()
+    return products_refresh()
+}
+
+fn products_refresh() -> int:
+{
+    open_db()
+    global ids, names, prices
+    ids = []
+    names = []
+    prices = []
+    st = sqlite_prepare(db, "SELECT id,name,price FROM products ORDER BY id")
+    while sqlite_step(st) == 1:
+    {
+        ids.push(sqlite_column_int(st, 0))
+        names.push(sqlite_column_string(st, 1))
+        prices.push(sqlite_column_int(st, 2))
+    }
+    sqlite_finalize(st)
+    return ids.len()
+}
+
+fn product_add(name: string, price: int) -> int:
+{
+    open_db()
+    st = sqlite_prepare(db, "INSERT INTO products(name,price) VALUES(?,?)")
+    sqlite_bind_string(st, 1, name)
+    sqlite_bind_int(st, 2, price)
+    sqlite_step(st)
+    sqlite_finalize(st)
+    return products_refresh()
+}
+
+fn product_update(id: int, name: string, price: int) -> int:
+{
+    open_db()
+    st = sqlite_prepare(db, "UPDATE products SET name=?,price=? WHERE id=?")
+    sqlite_bind_string(st, 1, name)
+    sqlite_bind_int(st, 2, price)
+    sqlite_bind_int(st, 3, id)
+    sqlite_step(st)
+    sqlite_finalize(st)
+    return products_refresh()
+}
+
+fn product_delete(id: int) -> int:
+{
+    open_db()
+    st = sqlite_prepare(db, "DELETE FROM products WHERE id=?")
+    sqlite_bind_int(st, 1, id)
+    sqlite_step(st)
+    sqlite_finalize(st)
+    return products_refresh()
+}
+
+fn product_id(i: int) -> int: { return ids[i] }
+fn product_name(i: int) -> string: { return names[i] }
+fn product_price(i: int) -> int: { return prices[i] }
