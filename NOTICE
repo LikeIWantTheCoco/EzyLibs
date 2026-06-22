@@ -1,0 +1,37 @@
+EzyLibs - Libraries for EzyLang
+Copyright (C) 2026 Atherzy
+
+This software includes third-party libraries under various licenses:
+
+----------------------------------------------------------------
+1. GTK3 (https://www.gtk.org/)
+   Copyright (C) The GTK Team
+   Licensed under GNU Lesser General Public License v2.1
+   See licenses/GTK-LGPL-2.1.txt
+
+----------------------------------------------------------------
+2. libcurl (https://curl.se/)
+   Copyright (C) Daniel Stenberg and contributors
+   Licensed under MIT/curl license
+   See licenses/curl-MIT.txt
+
+----------------------------------------------------------------
+3. SQLite (https://www.sqlite.org/)
+   Public Domain
+   https://www.sqlite.org/copyright.html
+
+----------------------------------------------------------------
+4. OpenSSL (https://www.openssl.org/)
+   Copyright (c) 1998-2024 The OpenSSL Project
+   Copyright (c) 1995-1998 Eric Young (eay@cryptsoft.com)
+   Licensed under Apache License 2.0
+   See licenses/openssl-Apache-2.0.txt
+   See licenses/openssl-NOTICE.txt
+
+   This product includes software developed by the OpenSSL Project
+   for use in the OpenSSL Toolkit (https://www.openssl.org/)
+   This product includes cryptographic software written by Eric Young
+   (eay@cryptsoft.com)
+
+----------------------------------------------------------------
+Full license text of OpenSSL library is avaliable in the 'crypto' directory
