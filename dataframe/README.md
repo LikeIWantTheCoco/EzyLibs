@@ -93,6 +93,12 @@ fn main():
 - `df_drop(h, col)`
 - `df_concat(a, b)` — stack rows (same column count)
 - `df_merge(left, right, on)` — inner join on a key column
+- `df_merge_left(left, right, on)` — left join (keep all left rows)
+- `df_merge_outer(left, right, on)` — full outer join (union of keys)
+
+### Multi-aggregate group-by (new handle)
+- `df_groupby_agg(h, group_col, value_col, aggs)` — `aggs` is a comma list
+  of `mean`, `sum`, `count`, `min`, `max`, `std`, `median`; one column each
 
 ### Statistics
 - `df_corr(h, a, b)` — Pearson correlation between two numeric columns
@@ -120,6 +126,13 @@ fn main():
 - `df_print(h)` — pretty table to stdout (first 20 rows)
 - `df_to_string(h) -> string` — full table as text
 - `df_describe(h) -> string` — count/mean/std/min/max per numeric column
+- `df_describe_str(h) -> string` — count/unique/top/freq per string column
+
+### Export
+- `df_to_markdown(h) -> string` — GitHub-flavored markdown table
+- `df_to_json(h) -> string` — array of objects (numbers/null typed, strings quoted)
+- `df_save_markdown(h, path) -> int`
+- `df_save_json(h, path) -> int`
 
 ## Notes
 

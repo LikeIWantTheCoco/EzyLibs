@@ -76,7 +76,13 @@ extern fn df_with_scalar(h: int, newcol: string, col: string, oper: string, scal
 extern fn df_rename(h: int, oldname: string, newname: string) -> int
 extern fn df_drop(h: int, col: string) -> int
 extern fn df_concat(a: int, b: int) -> int               # stack rows (same column count)
-extern fn df_merge(left: int, right: int, on: string) -> int   # inner join on a key column
+extern fn df_merge(left: int, right: int, on: string) -> int        # inner join
+extern fn df_merge_left(left: int, right: int, on: string) -> int   # left join
+extern fn df_merge_outer(left: int, right: int, on: string) -> int  # full outer join
+
+# ── Multi-aggregate group-by (NEW handle) ─────────────
+# aggs is a comma list of: mean, sum, count, min, max, std, median
+extern fn df_groupby_agg(h: int, group_col: string, value_col: string, aggs: string) -> int
 
 # ── Statistics ────────────────────────────────────────
 extern fn df_corr(h: int, a: string, b: string) -> float       # Pearson correlation
@@ -102,7 +108,14 @@ extern fn df_unique(h: int, col: string) -> int                # distinct values
 extern fn df_pivot(h: int, index_col: string, columns_col: string, value_col: string, agg: string) -> int
 # agg is one of "mean", "sum", "count", "min", "max"
 
-# ── Rendering ─────────────────────────────────────────
+# ── Rendering / describe ──────────────────────────────
 extern fn df_print(h: int) -> int                    # pretty table to stdout (head 20)
 extern fn df_to_string(h: int) -> string             # full table as text
 extern fn df_describe(h: int) -> string              # count/mean/std/min/max per numeric col
+extern fn df_describe_str(h: int) -> string          # count/unique/top/freq per string col
+
+# ── Export ────────────────────────────────────────────
+extern fn df_to_markdown(h: int) -> string           # GitHub-flavored markdown table
+extern fn df_to_json(h: int) -> string               # array of objects (numbers/null typed)
+extern fn df_save_markdown(h: int, path: string) -> int
+extern fn df_save_json(h: int, path: string) -> int

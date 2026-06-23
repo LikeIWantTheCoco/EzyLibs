@@ -1064,3 +1064,239 @@ long long df_pivot(long long h, const char *index_col, const char *columns_col,
     df_finalize_types(o);
     return df_register(o);
 }
+
+/* ── v1.3: joins, multi-agg group-by, string describe, exports ─────
+ * All frame-returning functions produce a NEW handle.
+ */
+
+/* generic join: how = 0 inner, 1 left, 2 outer (full). Output columns are
+   all left columns followed by the right columns except the duplicated key. */
+static long long df_join(DataFrame *l, DataFrame *rt, const char *on, int how) {
+    if (!l || !rt) return 0;
+    long long lc = col_index(l, on), rc = col_index(rt, on);
+    if (lc < 0 || rc < 0) return 0;
+
+    long long cap = 16, np = 0;
+    long long *li = malloc((size_t)cap * sizeof(long long)); /* left row, -1 = none */
+    long long *ri = malloc((size_t)cap * sizeof(long long)); /* right row, -1 = none */
+    #define PUSH(a,b) do { if (np==cap){cap*=2; li=realloc(li,(size_t)cap*sizeof(long long)); ri=realloc(ri,(size_t)cap*sizeof(long long));} li[np]=(a); ri[np]=(b); np++; } while(0)
+
+    for (long long i = 0; i < l->nrows; i++) {
+        int matched = 0;
+        for (long long j = 0; j < rt->nrows; j++)
+            if (strcmp(l->cols[lc].strs[i], rt->cols[rc].strs[j]) == 0) { PUSH(i, j); matched = 1; }
+        if (!matched && how != 0) PUSH(i, -1);     /* left/outer keep unmatched left */
+    }
+    if (how == 2) {                                 /* outer: add right-only keys */
+        for (long long j = 0; j < rt->nrows; j++) {
+            int seen = 0;
+            for (long long i = 0; i < l->nrows; i++)
+                if (strcmp(l->cols[lc].strs[i], rt->cols[rc].strs[j]) == 0) { seen = 1; break; }
+            if (!seen) PUSH(-1, j);
+        }
+    }
+
+    long long outc = l->ncols + rt->ncols - 1;
+    DataFrame *o = df_alloc(outc, np);
+    long long oc = 0;
+    for (long long c = 0; c < l->ncols; c++) o->names[oc++] = dup_str(l->names[c]);
+    for (long long c = 0; c < rt->ncols; c++) if (c != rc) o->names[oc++] = dup_str(rt->names[c]);
+
+    for (long long k = 0; k < np; k++) {
+        oc = 0;
+        for (long long c = 0; c < l->ncols; c++) {
+            const char *s = "";
+            if (li[k] >= 0) s = l->cols[c].strs[li[k]];
+            else if (c == lc && ri[k] >= 0) s = rt->cols[rc].strs[ri[k]]; /* key from right */
+            o->cols[oc++].strs[k] = dup_str(s);
+        }
+        for (long long c = 0; c < rt->ncols; c++) {
+            if (c == rc) continue;
+            const char *s = (ri[k] >= 0) ? rt->cols[c].strs[ri[k]] : "";
+            o->cols[oc++].strs[k] = dup_str(s);
+        }
+    }
+    #undef PUSH
+    free(li); free(ri);
+    df_finalize_types(o);
+    return df_register(o);
+}
+
+long long df_merge_left(long long hl, long long hr, const char *on)  { return df_join(DF(hl), DF(hr), on, 1); }
+long long df_merge_outer(long long hl, long long hr, const char *on) { return df_join(DF(hl), DF(hr), on, 2); }
+
+/* group-by with several aggregates at once: aggs_csv e.g. "mean,sum,count".
+   Output columns: group_col, then one column per requested aggregate. */
+long long df_groupby_agg(long long h, const char *group_col,
+                         const char *value_col, const char *aggs_csv) {
+    DataFrame *d = DF(h);
+    long long gc = col_index(d, group_col), vc = col_index(d, value_col);
+    if (gc < 0 || vc < 0) return 0;
+
+    char *spec = dup_str(aggs_csv);
+    char *aggs[16]; long long na = 0;
+    char *tok = strtok(spec, ",");
+    while (tok && na < 16) { while (*tok == ' ') tok++; aggs[na++] = tok; tok = strtok(NULL, ","); }
+
+    /* distinct groups (first-seen) */
+    char **keys = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(char *));
+    long long nk = 0;
+    for (long long r = 0; r < d->nrows; r++) {
+        const char *k = d->cols[gc].strs[r]; int seen = 0;
+        for (long long j = 0; j < nk; j++) if (!strcmp(keys[j], k)) { seen = 1; break; }
+        if (!seen) keys[nk++] = (char *)k;
+    }
+
+    DataFrame *o = df_alloc(1 + na, nk);
+    o->names[0] = dup_str(group_col);
+    for (long long a = 0; a < na; a++) o->names[1 + a] = dup_str(aggs[a]);
+
+    double *bucket = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(double));
+    char buf[64];
+    for (long long g = 0; g < nk; g++) {
+        long long m = 0;
+        for (long long r = 0; r < d->nrows; r++) {
+            if (strcmp(d->cols[gc].strs[r], keys[g]) != 0) continue;
+            double v = d->cols[vc].nums[r];
+            if (!isnan(v)) bucket[m++] = v;
+        }
+        o->cols[0].strs[g] = dup_str(keys[g]);
+        for (long long a = 0; a < na; a++) {
+            double res;
+            if (!strcmp(aggs[a], "std")) {
+                if (m < 2) res = NAN;
+                else { double mu = agg_list(bucket, m, "mean"), s = 0;
+                       for (long long i = 0; i < m; i++) { double e = bucket[i]-mu; s += e*e; }
+                       res = sqrt(s / (double)(m - 1)); }
+            } else if (!strcmp(aggs[a], "median")) {
+                if (m == 0) res = NAN;
+                else { qsort(bucket, (size_t)m, sizeof(double), cmp_double);
+                       res = (m % 2) ? bucket[m/2] : (bucket[m/2-1]+bucket[m/2])/2.0; }
+            } else {
+                res = agg_list(bucket, m, aggs[a]);
+            }
+            fmt_num(res, buf, sizeof buf);
+            o->cols[1 + a].strs[g] = dup_str(buf);
+        }
+    }
+    free(bucket); free(keys); free(spec);
+    df_finalize_types(o);
+    return df_register(o);
+}
+
+/* describe non-numeric columns: count / unique / top (mode) / freq */
+char *df_describe_str(long long h) {
+    DataFrame *d = DF(h);
+    if (!d) return dup_str("");
+    size_t cap = 128 + (size_t)d->ncols * 200;
+    char *out = malloc(cap); size_t o = 0;
+    #define PUT(...) do { o += (size_t)snprintf(out + o, cap - o, __VA_ARGS__); } while (0)
+    PUT("%-16s %8s %8s %-16s %6s\n", "column", "count", "unique", "top", "freq");
+    for (long long c = 0; c < d->ncols; c++) {
+        if (d->cols[c].is_numeric) continue;
+        long long count = 0, uniq = 0, topfreq = 0;
+        const char *top = "";
+        for (long long r = 0; r < d->nrows; r++) {
+            const char *s = d->cols[c].strs[r];
+            if (s[0] != '\0') count++;
+            int seen = 0;
+            for (long long j = 0; j < r; j++) if (!strcmp(d->cols[c].strs[j], s)) { seen = 1; break; }
+            if (!seen && s[0] != '\0') {
+                uniq++;
+                long long f = 0;
+                for (long long j = 0; j < d->nrows; j++) if (!strcmp(d->cols[c].strs[j], s)) f++;
+                if (f > topfreq) { topfreq = f; top = s; }
+            }
+        }
+        PUT("%-16s %8lld %8lld %-16s %6lld\n", d->names[c], count, uniq, top, topfreq);
+    }
+    #undef PUT
+    return out;
+}
+
+/* ── exports ───────────────────────────────────────────────────── */
+
+char *df_to_markdown(long long h) {
+    DataFrame *d = DF(h);
+    if (!d) return dup_str("");
+    size_t cap = 256;
+    for (long long c = 0; c < d->ncols; c++) {
+        cap += strlen(d->names[c]) + 8;
+        for (long long r = 0; r < d->nrows; r++) cap += strlen(d->cols[c].strs[r]) + 4;
+    }
+    char *out = malloc(cap); size_t o = 0;
+    #define PUT(...) do { o += (size_t)snprintf(out + o, cap - o, __VA_ARGS__); } while (0)
+    PUT("|");
+    for (long long c = 0; c < d->ncols; c++) PUT(" %s |", d->names[c]);
+    PUT("\n|");
+    for (long long c = 0; c < d->ncols; c++) PUT(" --- |");
+    PUT("\n");
+    for (long long r = 0; r < d->nrows; r++) {
+        PUT("|");
+        for (long long c = 0; c < d->ncols; c++) {
+            const char *s = d->cols[c].strs[r];
+            PUT(" %s |", s[0] ? s : "");
+        }
+        PUT("\n");
+    }
+    #undef PUT
+    return out;
+}
+
+static void json_escape(const char *s, char *out, size_t *o, size_t cap) {
+    for (const char *p = s; *p; p++) {
+        char c = *p;
+        if (c == '"' || c == '\\') { if (*o+2<cap){ out[(*o)++]='\\'; out[(*o)++]=c; } }
+        else if (c == '\n')        { if (*o+2<cap){ out[(*o)++]='\\'; out[(*o)++]='n'; } }
+        else if (c == '\t')        { if (*o+2<cap){ out[(*o)++]='\\'; out[(*o)++]='t'; } }
+        else if (*o+1<cap)         { out[(*o)++]=c; }
+    }
+}
+
+/* array of objects; numeric cells become numbers, empty cells become null */
+char *df_to_json(long long h) {
+    DataFrame *d = DF(h);
+    if (!d) return dup_str("[]");
+    size_t cap = 256;
+    for (long long c = 0; c < d->ncols; c++) {
+        cap += (strlen(d->names[c]) + 8) * (size_t)(d->nrows + 1);
+        for (long long r = 0; r < d->nrows; r++) cap += strlen(d->cols[c].strs[r]) + 8;
+    }
+    char *out = malloc(cap); size_t o = 0;
+    #define PUT(...) do { o += (size_t)snprintf(out + o, cap - o, __VA_ARGS__); } while (0)
+    PUT("[");
+    for (long long r = 0; r < d->nrows; r++) {
+        if (r) PUT(",");
+        PUT("{");
+        for (long long c = 0; c < d->ncols; c++) {
+            if (c) PUT(",");
+            PUT("\"");
+            json_escape(d->names[c], out, &o, cap);
+            PUT("\":");
+            const char *s = d->cols[c].strs[r];
+            if (s[0] == '\0') PUT("null");
+            else if (d->cols[c].is_numeric) PUT("%s", s);
+            else { PUT("\""); json_escape(s, out, &o, cap); PUT("\""); }
+        }
+        PUT("}");
+    }
+    PUT("]");
+    #undef PUT
+    return out;
+}
+
+long long df_save_json(long long h, const char *path) {
+    char *s = df_to_json(h);
+    FILE *f = fopen(path, "wb");
+    if (!f) { free(s); return 0; }
+    fputs(s, f); fputc('\n', f); fclose(f); free(s);
+    return 1;
+}
+
+long long df_save_markdown(long long h, const char *path) {
+    char *s = df_to_markdown(h);
+    FILE *f = fopen(path, "wb");
+    if (!f) { free(s); return 0; }
+    fputs(s, f); fclose(f); free(s);
+    return 1;
+}
