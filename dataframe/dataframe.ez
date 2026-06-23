@@ -55,6 +55,21 @@ extern fn df_filter_le(h: int, col: string, v: float) -> int
 extern fn df_filter_eq(h: int, col: string, v: float) -> int
 extern fn df_filter_ne(h: int, col: string, v: float) -> int
 extern fn df_filter_str(h: int, col: string, val: string) -> int   # exact text match
+extern fn df_query(h: int, expr: string) -> int        # "age > 30 and dept == Eng"
+extern fn df_isin(h: int, col: string, values_csv: string) -> int  # col value in {a,b,c}
+extern fn df_between(h: int, col: string, lo: float, hi: float) -> int  # lo <= col <= hi
+extern fn df_str_contains(h: int, col: string, sub: string) -> int     # substring match
+extern fn df_nlargest(h: int, col: string, n: int) -> int          # top n by col desc
+extern fn df_nsmallest(h: int, col: string, n: int) -> int         # bottom n by col asc
+
+# ── De-duplication / replacement (return NEW handle) ──
+extern fn df_drop_duplicates(h: int, col: string) -> int           # unique by one column
+extern fn df_drop_duplicates_all(h: int) -> int                    # unique full rows
+extern fn df_replace_str(h: int, col: string, oldv: string, newv: string) -> int
+
+# ── Sampling ──────────────────────────────────────────
+extern fn df_sample(h: int, n: int) -> int             # random n rows (no replacement)
+extern fn df_set_seed(s: int) -> int                   # reproducible df_sample
 
 # ── Sorting (return NEW handle) ───────────────────────
 extern fn df_sort(h: int, col: string, ascending: int) -> int      # ascending: 1/0
@@ -93,9 +108,14 @@ extern fn df_dropna(h: int, col: string) -> int                # drop rows where
 extern fn df_fillna(h: int, col: string, value: float) -> int  # fill empty numeric cells
 extern fn df_fillna_str(h: int, col: string, text: string) -> int
 
-# ── Cumulative / rolling (add a column, NEW handle) ───
+# ── Cumulative / rolling / expanding (add a column, NEW handle) ───
 extern fn df_cumsum(h: int, col: string) -> int                # adds "<col>_cumsum"
+extern fn df_cummax(h: int, col: string) -> int
+extern fn df_cummin(h: int, col: string) -> int
+extern fn df_cumprod(h: int, col: string) -> int
 extern fn df_rolling_mean(h: int, col: string, window: int) -> int  # adds "<col>_rollN"
+extern fn df_rolling_sum(h: int, col: string, window: int) -> int   # adds "<col>_rollsumN"
+extern fn df_expanding_mean(h: int, col: string) -> int
 
 # ── Element-wise transforms (add a column, NEW handle) ─
 extern fn df_with_round(h: int, newcol: string, col: string, ndigits: int) -> int
@@ -107,6 +127,10 @@ extern fn df_rank(h: int, newcol: string, col: string, ascending: int) -> int
 extern fn df_unique(h: int, col: string) -> int                # distinct values, 1 column
 extern fn df_pivot(h: int, index_col: string, columns_col: string, value_col: string, agg: string) -> int
 # agg is one of "mean", "sum", "count", "min", "max"
+extern fn df_melt(h: int, id_cols: string, value_cols: string, var_name: string, value_name: string) -> int  # wide -> long
+extern fn df_add_rownum(h: int, name: string) -> int           # add a 0-based row index column
+extern fn df_with_str(h: int, newcol: string, col: string, oper: string) -> int  # upper|lower|len|strip|title
+extern fn df_shape(h: int) -> string                           # "(rows, cols)"
 
 # ── Rendering / describe ──────────────────────────────
 extern fn df_print(h: int) -> int                    # pretty table to stdout (head 20)

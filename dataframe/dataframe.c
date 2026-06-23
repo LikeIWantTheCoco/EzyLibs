@@ -1300,3 +1300,354 @@ long long df_save_markdown(long long h, const char *path) {
     fputs(s, f); fclose(f); free(s);
     return 1;
 }
+
+/* ── v1.4: query, dedup, predicates, top-N, melt, str ops, sampling ─ */
+#include <time.h>
+
+static void df_push_str_col(DataFrame *d, const char *name, char **vals /*owned*/) {
+    long long nc = d->ncols + 1;
+    d->names = realloc(d->names, (size_t)nc * sizeof(char *));
+    d->cols  = realloc(d->cols,  (size_t)nc * sizeof(Column));
+    d->names[d->ncols] = dup_str(name);
+    Column *col = &d->cols[d->ncols];
+    col->nums = calloc((size_t)(d->nrows > 0 ? d->nrows : 1), sizeof(double));
+    col->strs = vals;
+    col->is_numeric = 0;
+    d->ncols = nc;
+    /* numeric inference for just this column */
+    int numeric = 1, any = 0;
+    for (long long r = 0; r < d->nrows; r++) {
+        if (!vals[r] || vals[r][0] == '\0') { col->nums[r] = NAN; continue; }
+        double v; if (parse_num(vals[r], &v)) { col->nums[r] = v; any = 1; }
+        else { numeric = 0; col->nums[r] = NAN; }
+    }
+    col->is_numeric = numeric && any;
+}
+
+/* keep rows selected by a boolean mask */
+static long long df_filter_mask(DataFrame *d, const char *mask) {
+    long long *idx = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(long long));
+    long long m = 0;
+    for (long long r = 0; r < d->nrows; r++) if (mask[r]) idx[m++] = r;
+    DataFrame *out = df_copy_rows(d, idx, m); free(idx);
+    return df_register(out);
+}
+
+/* evaluate "col OP value" for one row */
+static int eval_clause(DataFrame *d, long long r, const char *col, const char *op, const char *val) {
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    double rv;
+    int numeric = d->cols[c].is_numeric && parse_num(val, &rv);
+    if (numeric) {
+        double lv = d->cols[c].nums[r];
+        if (isnan(lv)) return 0;
+        if (!strcmp(op, "==")) return lv == rv;
+        if (!strcmp(op, "!=")) return lv != rv;
+        if (!strcmp(op, ">"))  return lv >  rv;
+        if (!strcmp(op, ">=")) return lv >= rv;
+        if (!strcmp(op, "<"))  return lv <  rv;
+        if (!strcmp(op, "<=")) return lv <= rv;
+        return 0;
+    }
+    int cmp = strcmp(d->cols[c].strs[r], val);
+    if (!strcmp(op, "==")) return cmp == 0;
+    if (!strcmp(op, "!=")) return cmp != 0;
+    if (!strcmp(op, ">"))  return cmp >  0;
+    if (!strcmp(op, ">=")) return cmp >= 0;
+    if (!strcmp(op, "<"))  return cmp <  0;
+    if (!strcmp(op, "<=")) return cmp <= 0;
+    return 0;
+}
+
+/* read one whitespace/quote-delimited token from *p */
+static int next_word(const char **p, char *out, size_t cap) {
+    const char *s = *p;
+    while (*s == ' ' || *s == '\t') s++;
+    if (*s == '\0') { *p = s; return 0; }
+    size_t o = 0;
+    if (*s == '"' || *s == '\'') {
+        char q = *s++;
+        while (*s && *s != q && o + 1 < cap) out[o++] = *s++;
+        if (*s == q) s++;
+    } else {
+        while (*s && *s != ' ' && *s != '\t' && o + 1 < cap) out[o++] = *s++;
+    }
+    out[o] = '\0';
+    *p = s;
+    return 1;
+}
+
+/* df_query: predicate like  age > 30 and dept == Eng  (no parentheses;
+   clauses are COL OP VALUE joined by lowercase and / or, left-to-right) */
+long long df_query(long long h, const char *expr) {
+    DataFrame *d = DF(h);
+    if (!d) return 0;
+    char *mask = malloc((size_t)(d->nrows > 0 ? d->nrows : 1));
+    for (long long r = 0; r < d->nrows; r++) {
+        const char *p = expr;
+        char col[128], op[8], val[256], logic[8];
+        int have = 0, acc = 0;
+        while (next_word(&p, col, sizeof col)) {
+            if (!next_word(&p, op, sizeof op)) break;
+            if (!next_word(&p, val, sizeof val)) break;
+            int c = eval_clause(d, r, col, op, val);
+            if (!have) { acc = c; have = 1; }
+            /* logic already consumed below */
+            if (next_word(&p, logic, sizeof logic)) {
+                int next_is_and = !strcmp(logic, "and") || !strcmp(logic, "&&");
+                int next_is_or  = !strcmp(logic, "or")  || !strcmp(logic, "||");
+                if (next_is_and || next_is_or) {
+                    char c2col[128], c2op[8], c2val[256];
+                    if (next_word(&p, c2col, sizeof c2col) &&
+                        next_word(&p, c2op, sizeof c2op) &&
+                        next_word(&p, c2val, sizeof c2val)) {
+                        int c2 = eval_clause(d, r, c2col, c2op, c2val);
+                        acc = next_is_and ? (acc && c2) : (acc || c2);
+                    }
+                }
+            } else break;
+        }
+        mask[r] = (char)(have ? acc : 0);
+    }
+    long long res = df_filter_mask(d, mask);
+    free(mask);
+    return res;
+}
+
+/* drop duplicate rows by one column (keep first) */
+long long df_drop_duplicates(long long h, const char *col) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    long long *idx = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(long long));
+    long long m = 0;
+    for (long long r = 0; r < d->nrows; r++) {
+        int seen = 0;
+        for (long long k = 0; k < m; k++)
+            if (!strcmp(d->cols[c].strs[idx[k]], d->cols[c].strs[r])) { seen = 1; break; }
+        if (!seen) idx[m++] = r;
+    }
+    DataFrame *out = df_copy_rows(d, idx, m); free(idx);
+    return df_register(out);
+}
+
+/* drop fully-identical rows (all columns), keep first */
+long long df_drop_duplicates_all(long long h) {
+    DataFrame *d = DF(h);
+    if (!d) return 0;
+    long long *idx = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(long long));
+    long long m = 0;
+    for (long long r = 0; r < d->nrows; r++) {
+        int seen = 0;
+        for (long long k = 0; k < m && !seen; k++) {
+            int same = 1;
+            for (long long c = 0; c < d->ncols; c++)
+                if (strcmp(d->cols[c].strs[idx[k]], d->cols[c].strs[r])) { same = 0; break; }
+            if (same) seen = 1;
+        }
+        if (!seen) idx[m++] = r;
+    }
+    DataFrame *out = df_copy_rows(d, idx, m); free(idx);
+    return df_register(out);
+}
+
+/* keep rows whose column value is in a comma-separated set */
+long long df_isin(long long h, const char *col, const char *values_csv) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    char *spec = dup_str(values_csv);
+    char *vals[256]; long long nv = 0;
+    char *tok = strtok(spec, ",");
+    while (tok && nv < 256) { while (*tok == ' ') tok++; vals[nv++] = tok; tok = strtok(NULL, ","); }
+    char *mask = malloc((size_t)(d->nrows > 0 ? d->nrows : 1));
+    for (long long r = 0; r < d->nrows; r++) {
+        mask[r] = 0;
+        for (long long j = 0; j < nv; j++)
+            if (!strcmp(d->cols[c].strs[r], vals[j])) { mask[r] = 1; break; }
+    }
+    long long res = df_filter_mask(d, mask);
+    free(mask); free(spec);
+    return res;
+}
+
+/* keep rows where lo <= col <= hi (numeric) */
+long long df_between(long long h, const char *col, double lo, double hi) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    char *mask = malloc((size_t)(d->nrows > 0 ? d->nrows : 1));
+    for (long long r = 0; r < d->nrows; r++) {
+        double v = d->cols[c].nums[r];
+        mask[r] = (char)(!isnan(v) && v >= lo && v <= hi);
+    }
+    long long res = df_filter_mask(d, mask); free(mask);
+    return res;
+}
+
+/* keep rows where a string column contains a substring */
+long long df_str_contains(long long h, const char *col, const char *sub) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    char *mask = malloc((size_t)(d->nrows > 0 ? d->nrows : 1));
+    for (long long r = 0; r < d->nrows; r++)
+        mask[r] = (char)(strstr(d->cols[c].strs[r], sub) != NULL);
+    long long res = df_filter_mask(d, mask); free(mask);
+    return res;
+}
+
+long long df_nlargest(long long h, const char *col, long long n) {
+    long long s = df_sort(h, col, 0);   /* descending */
+    return s ? df_head(s, n) : 0;
+}
+long long df_nsmallest(long long h, const char *col, long long n) {
+    long long s = df_sort(h, col, 1);   /* ascending */
+    return s ? df_head(s, n) : 0;
+}
+
+/* replace exact cell text in a column */
+long long df_replace_str(long long h, const char *col, const char *oldv, const char *newv) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    DataFrame *r = df_clone_all(d);
+    for (long long row = 0; row < r->nrows; row++)
+        if (!strcmp(r->cols[c].strs[row], oldv)) {
+            free(r->cols[c].strs[row]);
+            r->cols[c].strs[row] = dup_str(newv);
+        }
+    df_finalize_types(r);
+    return df_register(r);
+}
+
+/* cumulative / expanding columns */
+long long df_rolling_sum(long long h, const char *col, long long window) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0 || window < 1) return 0;
+    double *v = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(double));
+    for (long long r = 0; r < d->nrows; r++) {
+        if (r + 1 < window) { v[r] = NAN; continue; }
+        double s = 0;
+        for (long long j = r - window + 1; j <= r; j++) { double x = d->cols[c].nums[j]; if (!isnan(x)) s += x; }
+        v[r] = s;
+    }
+    char nm[256]; snprintf(nm, sizeof nm, "%s_rollsum%lld", col, window);
+    return df_emit_with(d, nm, v);
+}
+long long df_cummax(long long h, const char *col) {
+    DataFrame *d = DF(h); long long c = col_index(d, col); if (c < 0) return 0;
+    double *v = malloc((size_t)(d->nrows>0?d->nrows:1)*sizeof(double)); double m = NAN;
+    for (long long r = 0; r < d->nrows; r++) { double x = d->cols[c].nums[r]; if (!isnan(x)) m = isnan(m)||x>m?x:m; v[r] = m; }
+    char nm[256]; snprintf(nm, sizeof nm, "%s_cummax", col); return df_emit_with(d, nm, v);
+}
+long long df_cummin(long long h, const char *col) {
+    DataFrame *d = DF(h); long long c = col_index(d, col); if (c < 0) return 0;
+    double *v = malloc((size_t)(d->nrows>0?d->nrows:1)*sizeof(double)); double m = NAN;
+    for (long long r = 0; r < d->nrows; r++) { double x = d->cols[c].nums[r]; if (!isnan(x)) m = isnan(m)||x<m?x:m; v[r] = m; }
+    char nm[256]; snprintf(nm, sizeof nm, "%s_cummin", col); return df_emit_with(d, nm, v);
+}
+long long df_cumprod(long long h, const char *col) {
+    DataFrame *d = DF(h); long long c = col_index(d, col); if (c < 0) return 0;
+    double *v = malloc((size_t)(d->nrows>0?d->nrows:1)*sizeof(double)); double m = 1; int started = 0;
+    for (long long r = 0; r < d->nrows; r++) { double x = d->cols[c].nums[r]; if (!isnan(x)) { m *= x; started = 1; } v[r] = started ? m : NAN; }
+    char nm[256]; snprintf(nm, sizeof nm, "%s_cumprod", col); return df_emit_with(d, nm, v);
+}
+long long df_expanding_mean(long long h, const char *col) {
+    DataFrame *d = DF(h); long long c = col_index(d, col); if (c < 0) return 0;
+    double *v = malloc((size_t)(d->nrows>0?d->nrows:1)*sizeof(double)); double s = 0; long long k = 0;
+    for (long long r = 0; r < d->nrows; r++) { double x = d->cols[c].nums[r]; if (!isnan(x)) { s += x; k++; } v[r] = k ? s/(double)k : NAN; }
+    char nm[256]; snprintf(nm, sizeof nm, "%s_expmean", col); return df_emit_with(d, nm, v);
+}
+
+/* element-wise string transform -> new column. op: upper|lower|len|strip|title */
+long long df_with_str(long long h, const char *newcol, const char *col, const char *op) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    char **vals = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(char *));
+    char buf[1024];
+    for (long long r = 0; r < d->nrows; r++) {
+        const char *s = d->cols[c].strs[r];
+        if (!strcmp(op, "len")) { snprintf(buf, sizeof buf, "%zu", strlen(s)); vals[r] = dup_str(buf); continue; }
+        size_t n = strlen(s); if (n >= sizeof buf) n = sizeof buf - 1;
+        memcpy(buf, s, n); buf[n] = '\0';
+        if (!strcmp(op, "upper"))      for (size_t i = 0; i < n; i++) buf[i] = (char)toupper((unsigned char)buf[i]);
+        else if (!strcmp(op, "lower")) for (size_t i = 0; i < n; i++) buf[i] = (char)tolower((unsigned char)buf[i]);
+        else if (!strcmp(op, "title")) { int start = 1; for (size_t i = 0; i < n; i++) { if (buf[i]==' ') start=1; else { buf[i]=(char)(start?toupper((unsigned char)buf[i]):tolower((unsigned char)buf[i])); start=0; } } }
+        else if (!strcmp(op, "strip")) { size_t a=0,b=n; while(a<b&&isspace((unsigned char)buf[a]))a++; while(b>a&&isspace((unsigned char)buf[b-1]))b--; memmove(buf,buf+a,b-a); buf[b-a]='\0'; }
+        vals[r] = dup_str(buf);
+    }
+    DataFrame *r = df_clone_all(d);
+    df_push_str_col(r, newcol, vals);
+    return df_register(r);
+}
+
+/* random sample of n rows (without replacement) */
+static int g_seeded = 0;
+long long df_sample(long long h, long long n) {
+    DataFrame *d = DF(h);
+    if (!d) return 0;
+    if (!g_seeded) { srand((unsigned)time(NULL)); g_seeded = 1; }
+    long long N = d->nrows;
+    if (n > N) n = N;
+    if (n < 0) n = 0;
+    long long *idx = malloc((size_t)(N > 0 ? N : 1) * sizeof(long long));
+    for (long long i = 0; i < N; i++) idx[i] = i;
+    for (long long i = N - 1; i > 0; i--) { long long j = rand() % (i + 1); long long t = idx[i]; idx[i] = idx[j]; idx[j] = t; }
+    DataFrame *out = df_copy_rows(d, idx, n); free(idx);
+    return df_register(out);
+}
+
+long long df_set_seed(long long s) { srand((unsigned)s); g_seeded = 1; return 1; }
+
+/* "(rows, cols)" */
+char *df_shape(long long h) {
+    DataFrame *d = DF(h);
+    char buf[64];
+    snprintf(buf, sizeof buf, "(%lld, %lld)", d ? d->nrows : 0, d ? d->ncols : 0);
+    return dup_str(buf);
+}
+
+/* prepend a 0-based row-number column */
+long long df_add_rownum(long long h, const char *name) {
+    DataFrame *d = DF(h);
+    if (!d) return 0;
+    double *v = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(double));
+    for (long long r = 0; r < d->nrows; r++) v[r] = (double)r;
+    return df_emit_with(d, name, v);
+}
+
+/* melt wide->long: id_cols stay, value_cols become (var_name, value_name) pairs */
+long long df_melt(long long h, const char *id_csv, const char *value_csv,
+                  const char *var_name, const char *value_name) {
+    DataFrame *d = DF(h);
+    if (!d) return 0;
+    char *ids = dup_str(id_csv), *vals = dup_str(value_csv);
+    long long idc[64], valc[64], nid = 0, nval = 0;
+    char *tok = strtok(ids, ",");
+    while (tok && nid < 64) { while (*tok==' ') tok++; long long c = col_index(d, tok); if (c>=0) idc[nid++]=c; tok = strtok(NULL, ","); }
+    tok = strtok(vals, ",");
+    while (tok && nval < 64) { while (*tok==' ') tok++; long long c = col_index(d, tok); if (c>=0) valc[nval++]=c; tok = strtok(NULL, ","); }
+
+    long long outr = d->nrows * nval;
+    long long outc = nid + 2;
+    DataFrame *o = df_alloc(outc, outr);
+    for (long long i = 0; i < nid; i++) o->names[i] = dup_str(d->names[idc[i]]);
+    o->names[nid] = dup_str(var_name);
+    o->names[nid + 1] = dup_str(value_name);
+
+    long long row = 0;
+    for (long long r = 0; r < d->nrows; r++)
+        for (long long v = 0; v < nval; v++) {
+            for (long long i = 0; i < nid; i++) o->cols[i].strs[row] = dup_str(d->cols[idc[i]].strs[r]);
+            o->cols[nid].strs[row]     = dup_str(d->names[valc[v]]);
+            o->cols[nid + 1].strs[row] = dup_str(d->cols[valc[v]].strs[r]);
+            row++;
+        }
+    free(ids); free(vals);
+    df_finalize_types(o);
+    return df_register(o);
+}

@@ -78,6 +78,19 @@ fn main():
 - `df_filter_str(h, col, text)` — exact text match
 - `df_sort(h, col, ascending)` — `ascending`: `1` asc, `0` desc
 
+### Query / predicates / top-N (return a new handle)
+- `df_query(h, expr)` — predicate string, e.g. `"age > 30 and dept == Eng"`
+  (clauses `COL OP VALUE` joined by `and`/`or`, no parentheses)
+- `df_isin(h, col, "a,b,c")` — value in a set
+- `df_between(h, col, lo, hi)` — `lo <= col <= hi`
+- `df_str_contains(h, col, sub)` — substring match
+- `df_nlargest(h, col, n)` / `df_nsmallest(h, col, n)` — top / bottom n
+
+### De-duplication / replacement / sampling
+- `df_drop_duplicates(h, col)` / `df_drop_duplicates_all(h)`
+- `df_replace_str(h, col, oldv, newv)`
+- `df_sample(h, n)` / `df_set_seed(s)`
+
 ### Group-by (group_col → aggregate, new 2-column handle)
 - `df_groupby_mean/sum/min/max(h, group_col, value_col)`
 - `df_groupby_count(h, group_col)`
@@ -110,17 +123,23 @@ fn main():
 - `df_fillna_str(h, col, text)` — fill empty cells with text
 
 ### Cumulative / rolling / element-wise (add a column, new handle)
-- `df_cumsum(h, col)` → adds `<col>_cumsum`
-- `df_rolling_mean(h, col, window)` → adds `<col>_rollN`
+- `df_cumsum/cummax/cummin/cumprod(h, col)`
+- `df_rolling_mean(h, col, window)` → `<col>_rollN`
+- `df_rolling_sum(h, col, window)` → `<col>_rollsumN`
+- `df_expanding_mean(h, col)` → `<col>_expmean`
 - `df_with_round(h, newcol, col, ndigits)`
 - `df_with_abs(h, newcol, col)`
 - `df_with_clip(h, newcol, col, lo, hi)`
 - `df_rank(h, newcol, col, ascending)` — ordinal rank
+- `df_with_str(h, newcol, col, oper)` — `oper` ∈ `upper`/`lower`/`len`/`strip`/`title`
+- `df_add_rownum(h, name)` — add a 0-based index column
 
 ### Reshape extras (new handle)
 - `df_unique(h, col)` — distinct values as a one-column frame
-- `df_pivot(h, index_col, columns_col, value_col, agg)` — pivot table;
+- `df_pivot(h, index_col, columns_col, value_col, agg)` — long → wide pivot;
   `agg` ∈ `"mean"`, `"sum"`, `"count"`, `"min"`, `"max"`
+- `df_melt(h, id_cols, value_cols, var_name, value_name)` — wide → long
+- `df_shape(h) -> string` — `"(rows, cols)"`
 
 ### Rendering
 - `df_print(h)` — pretty table to stdout (first 20 rows)
