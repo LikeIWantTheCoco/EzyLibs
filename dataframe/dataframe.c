@@ -150,16 +150,9 @@ static long long count_fields(const char *line) {
     return n;
 }
 
-long long df_read_csv(const char *path) {
-    FILE *f = fopen(path, "rb");
-    if (!f) return 0;
-    fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
-    if (sz < 0) { fclose(f); return 0; }
-    char *txt = malloc((size_t)sz + 1);
-    size_t rd = fread(txt, 1, (size_t)sz, f);
-    txt[rd] = '\0';
-    fclose(f);
-
+/* Parse a CSV buffer into a registered DataFrame. Takes ownership of txt
+   (frees it). Returns a handle, or 0 on error. */
+static long long df_parse_csv(char *txt) {
     const char *p = txt;
     /* header */
     while (*p == '\r' || *p == '\n') p++;
@@ -199,6 +192,22 @@ long long df_read_csv(const char *path) {
     free(txt);
     df_finalize_types(d);
     return df_register(d);
+}
+
+long long df_read_csv(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+    if (sz < 0) { fclose(f); return 0; }
+    char *txt = malloc((size_t)sz + 1);
+    size_t rd = fread(txt, 1, (size_t)sz, f);
+    txt[rd] = '\0';
+    fclose(f);
+    return df_parse_csv(txt);
+}
+
+long long df_read_csv_string(const char *text) {
+    return df_parse_csv(dup_str(text));
 }
 
 long long df_save_csv(long long h, const char *path) {
@@ -615,4 +624,211 @@ char *df_describe(long long h) {
     }
     #undef PUT
     return out;
+}
+
+/* ── v1.1: computed columns, reshape, join, stats ──────────────────
+ * All transforms below return a NEW handle and never mutate the source.
+ */
+
+static void fmt_num(double v, char *buf, size_t n) {
+    if (isnan(v)) { buf[0] = '\0'; return; }
+    if (v == (long long)v && fabs(v) < 9e18) snprintf(buf, n, "%lld", (long long)v);
+    else snprintf(buf, n, "%.6g", v);
+}
+
+/* full copy of every row/column (unregistered) */
+static DataFrame *df_clone_all(DataFrame *src) {
+    long long *idx = malloc((size_t)(src->nrows > 0 ? src->nrows : 1) * sizeof(long long));
+    for (long long r = 0; r < src->nrows; r++) idx[r] = r;
+    DataFrame *d = df_copy_rows(src, idx, src->nrows);
+    free(idx);
+    return d;
+}
+
+/* append a numeric column (length nrows) to an unregistered frame */
+static void df_push_numeric_col(DataFrame *d, const char *name, const double *vals) {
+    long long nc = d->ncols + 1;
+    d->names = realloc(d->names, (size_t)nc * sizeof(char *));
+    d->cols  = realloc(d->cols,  (size_t)nc * sizeof(Column));
+    d->names[d->ncols] = dup_str(name);
+    Column *col = &d->cols[d->ncols];
+    col->is_numeric = 1;
+    col->nums = calloc((size_t)(d->nrows > 0 ? d->nrows : 1), sizeof(double));
+    col->strs = calloc((size_t)(d->nrows > 0 ? d->nrows : 1), sizeof(char *));
+    char buf[64];
+    for (long long r = 0; r < d->nrows; r++) {
+        col->nums[r] = vals[r];
+        fmt_num(vals[r], buf, sizeof buf);
+        col->strs[r] = dup_str(buf);
+    }
+    d->ncols = nc;
+}
+
+static double apply_op(double a, double b, const char *op) {
+    if (isnan(a) || isnan(b)) return NAN;
+    switch (op[0]) {
+        case '+': return a + b;
+        case '-': return a - b;
+        case '*': return a * b;
+        case '/': return b == 0 ? NAN : a / b;
+        case '%': return b == 0 ? NAN : fmod(a, b);
+        default:  return NAN;
+    }
+}
+
+/* new frame = source + a column  newname = colA <op> colB  (elementwise) */
+long long df_with_calc(long long h, const char *newname,
+                       const char *a, const char *op, const char *b) {
+    DataFrame *d = DF(h);
+    if (!d) return 0;
+    long long ca = col_index(d, a), cb = col_index(d, b);
+    if (ca < 0 || cb < 0) return 0;
+    double *vals = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(double));
+    for (long long r = 0; r < d->nrows; r++)
+        vals[r] = apply_op(d->cols[ca].nums[r], d->cols[cb].nums[r], op);
+    DataFrame *r = df_clone_all(d);
+    df_push_numeric_col(r, newname, vals);
+    free(vals);
+    return df_register(r);
+}
+
+/* new frame = source + a column  newname = col <op> scalar */
+long long df_with_scalar(long long h, const char *newname,
+                         const char *col, const char *op, double scalar) {
+    DataFrame *d = DF(h);
+    if (!d) return 0;
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    double *vals = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(double));
+    for (long long r = 0; r < d->nrows; r++)
+        vals[r] = apply_op(d->cols[c].nums[r], scalar, op);
+    DataFrame *r = df_clone_all(d);
+    df_push_numeric_col(r, newname, vals);
+    free(vals);
+    return df_register(r);
+}
+
+long long df_rename(long long h, const char *oldname, const char *newname) {
+    DataFrame *d = DF(h);
+    if (!d) return 0;
+    long long c = col_index(d, oldname);
+    if (c < 0) return 0;
+    DataFrame *r = df_clone_all(d);
+    free(r->names[c]);
+    r->names[c] = dup_str(newname);
+    return df_register(r);
+}
+
+long long df_drop(long long h, const char *col) {
+    DataFrame *d = DF(h);
+    if (!d) return 0;
+    long long drop = col_index(d, col);
+    if (drop < 0) return 0;
+    DataFrame *r = df_alloc(d->ncols - 1, d->nrows);
+    long long oc = 0;
+    for (long long c = 0; c < d->ncols; c++) {
+        if (c == drop) continue;
+        r->names[oc] = dup_str(d->names[c]);
+        for (long long row = 0; row < d->nrows; row++)
+            r->cols[oc].strs[row] = dup_str(d->cols[c].strs[row]);
+        oc++;
+    }
+    df_finalize_types(r);
+    return df_register(r);
+}
+
+/* stack two frames row-wise (must have the same column count) */
+long long df_concat(long long ha, long long hb) {
+    DataFrame *a = DF(ha), *b = DF(hb);
+    if (!a || !b || a->ncols != b->ncols) return 0;
+    long long n = a->nrows + b->nrows;
+    DataFrame *r = df_alloc(a->ncols, n);
+    for (long long c = 0; c < a->ncols; c++) {
+        r->names[c] = dup_str(a->names[c]);
+        for (long long row = 0; row < a->nrows; row++)
+            r->cols[c].strs[row] = dup_str(a->cols[c].strs[row]);
+        for (long long row = 0; row < b->nrows; row++)
+            r->cols[c].strs[a->nrows + row] = dup_str(b->cols[c].strs[row]);
+    }
+    df_finalize_types(r);
+    return df_register(r);
+}
+
+/* inner join on a shared key column; output = all left cols + right cols
+   except the duplicated key */
+long long df_merge(long long hl, long long hr, const char *on) {
+    DataFrame *l = DF(hl), *rt = DF(hr);
+    if (!l || !rt) return 0;
+    long long lc = col_index(l, on), rc = col_index(rt, on);
+    if (lc < 0 || rc < 0) return 0;
+
+    /* collect matching row pairs */
+    long long cap = 16, np = 0;
+    long long *lp = malloc((size_t)cap * sizeof(long long));
+    long long *rp = malloc((size_t)cap * sizeof(long long));
+    for (long long i = 0; i < l->nrows; i++)
+        for (long long j = 0; j < rt->nrows; j++)
+            if (strcmp(l->cols[lc].strs[i], rt->cols[rc].strs[j]) == 0) {
+                if (np == cap) { cap *= 2; lp = realloc(lp, (size_t)cap*sizeof(long long)); rp = realloc(rp, (size_t)cap*sizeof(long long)); }
+                lp[np] = i; rp[np] = j; np++;
+            }
+
+    long long outc = l->ncols + rt->ncols - 1;
+    DataFrame *o = df_alloc(outc, np);
+    long long oc = 0;
+    for (long long c = 0; c < l->ncols; c++) o->names[oc++] = dup_str(l->names[c]);
+    for (long long c = 0; c < rt->ncols; c++) if (c != rc) o->names[oc++] = dup_str(rt->names[c]);
+    for (long long k = 0; k < np; k++) {
+        oc = 0;
+        for (long long c = 0; c < l->ncols; c++)  o->cols[oc++].strs[k] = dup_str(l->cols[c].strs[lp[k]]);
+        for (long long c = 0; c < rt->ncols; c++) if (c != rc) o->cols[oc++].strs[k] = dup_str(rt->cols[c].strs[rp[k]]);
+    }
+    free(lp); free(rp);
+    df_finalize_types(o);
+    return df_register(o);
+}
+
+/* Pearson correlation between two numeric columns (NaN-safe) */
+double df_corr(long long h, const char *a, const char *b) {
+    DataFrame *d = DF(h);
+    long long ca = col_index(d, a), cb = col_index(d, b);
+    if (ca < 0 || cb < 0) return NAN;
+    double sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0; long long n = 0;
+    for (long long r = 0; r < d->nrows; r++) {
+        double x = d->cols[ca].nums[r], y = d->cols[cb].nums[r];
+        if (isnan(x) || isnan(y)) continue;
+        sx += x; sy += y; sxx += x*x; syy += y*y; sxy += x*y; n++;
+    }
+    if (n < 2) return NAN;
+    double cov = sxy - sx*sy/n;
+    double vx = sxx - sx*sx/n, vy = syy - sy*sy/n;
+    if (vx <= 0 || vy <= 0) return NAN;
+    return cov / sqrt(vx * vy);
+}
+
+/* linear-interpolated quantile q in [0,1] of a numeric column */
+double df_quantile(long long h, const char *col, double q) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return NAN;
+    double *tmp = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(double));
+    long long k = 0;
+    for (long long r = 0; r < d->nrows; r++) if (!isnan(d->cols[c].nums[r])) tmp[k++] = d->cols[c].nums[r];
+    if (k == 0) { free(tmp); return NAN; }
+    qsort(tmp, (size_t)k, sizeof(double), cmp_double);
+    if (q < 0) q = 0;
+    if (q > 1) q = 1;
+    double pos = q * (double)(k - 1);
+    long long lo = (long long)pos;
+    double frac = pos - (double)lo;
+    double res = (lo + 1 < k) ? tmp[lo] + frac * (tmp[lo+1] - tmp[lo]) : tmp[lo];
+    free(tmp);
+    return res;
+}
+
+/* distinct values of a column with their counts, sorted by count desc */
+long long df_value_counts(long long h, const char *col) {
+    long long g = df_groupby_count(h, col);
+    if (!g) return 0;
+    return df_sort(g, "count", 0);
 }

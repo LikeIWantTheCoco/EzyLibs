@@ -14,6 +14,7 @@
 
 # ── I/O ───────────────────────────────────────────────
 extern fn df_read_csv(path: string) -> int          # CSV file -> handle (0 on error)
+extern fn df_read_csv_string(text: string) -> int   # CSV text -> handle (inline data)
 extern fn df_save_csv(h: int, path: string) -> int  # write CSV (1 ok)
 extern fn df_free(h: int) -> int                     # release a handle
 
@@ -64,6 +65,22 @@ extern fn df_groupby_sum(h: int, group_col: string, value_col: string) -> int
 extern fn df_groupby_min(h: int, group_col: string, value_col: string) -> int
 extern fn df_groupby_max(h: int, group_col: string, value_col: string) -> int
 extern fn df_groupby_count(h: int, group_col: string) -> int
+extern fn df_value_counts(h: int, col: string) -> int   # distinct values + counts, desc
+
+# ── Computed columns (return NEW handle with one extra column) ──
+# op is one of "+", "-", "*", "/", "%"
+extern fn df_with_calc(h: int, newcol: string, a: string, oper: string, b: string) -> int
+extern fn df_with_scalar(h: int, newcol: string, col: string, oper: string, scalar: float) -> int
+
+# ── Reshape (return NEW handle) ───────────────────────
+extern fn df_rename(h: int, oldname: string, newname: string) -> int
+extern fn df_drop(h: int, col: string) -> int
+extern fn df_concat(a: int, b: int) -> int               # stack rows (same column count)
+extern fn df_merge(left: int, right: int, on: string) -> int   # inner join on a key column
+
+# ── Statistics ────────────────────────────────────────
+extern fn df_corr(h: int, a: string, b: string) -> float       # Pearson correlation
+extern fn df_quantile(h: int, col: string, q: float) -> float  # q in [0,1], linear interp
 
 # ── Rendering ─────────────────────────────────────────
 extern fn df_print(h: int) -> int                    # pretty table to stdout (head 20)

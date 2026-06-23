@@ -52,6 +52,7 @@ fn main():
 
 ### I/O
 - `df_read_csv(path) -> int` — parse a CSV file into a handle (`0` on error)
+- `df_read_csv_string(text) -> int` — parse inline CSV text
 - `df_save_csv(h, path) -> int` — write the frame back to CSV (`1` ok)
 - `df_free(h) -> int` — release a handle
 
@@ -80,6 +81,22 @@ fn main():
 ### Group-by (group_col → aggregate, new 2-column handle)
 - `df_groupby_mean/sum/min/max(h, group_col, value_col)`
 - `df_groupby_count(h, group_col)`
+- `df_value_counts(h, col)` — distinct values + counts, sorted descending
+
+### Computed columns (new handle with one extra numeric column)
+- `df_with_calc(h, newcol, a, oper, b)` — `newcol = a <op> b` elementwise
+- `df_with_scalar(h, newcol, col, oper, scalar)` — `newcol = col <op> scalar`
+- `oper` is one of `"+"`, `"-"`, `"*"`, `"/"`, `"%"`
+
+### Reshape (new handle)
+- `df_rename(h, oldname, newname)`
+- `df_drop(h, col)`
+- `df_concat(a, b)` — stack rows (same column count)
+- `df_merge(left, right, on)` — inner join on a key column
+
+### Statistics
+- `df_corr(h, a, b)` — Pearson correlation between two numeric columns
+- `df_quantile(h, col, q)` — quantile `q ∈ [0,1]`, linear interpolation
 
 ### Rendering
 - `df_print(h)` — pretty table to stdout (first 20 rows)
