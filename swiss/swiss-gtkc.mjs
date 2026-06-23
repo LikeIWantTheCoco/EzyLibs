@@ -79,6 +79,8 @@ function emit(ast, opts) {
   const cells = [];
   // component-level helper methods: const f = (a,b) => {…}
   const methods = [];
+  const refs = []; // useRef cells (mutable .current)
+  const derived = {}; // top-level `const x = expr` derived values (inlined, reactive)
   for (const stmt of comp.body.body) {
     if (stmt.type !== 'VariableDeclaration') continue;
     for (const d of stmt.declarations) {
@@ -86,12 +88,13 @@ function emit(ast, opts) {
       if (init && init.type === 'CallExpression' && init.callee.name === 'useState') {
         const [valId, setId] = d.id.elements;
         const a = init.arguments[0];
-        let t = 'int', ctype = 'long long', cinit = '0', initNode = null;
+        let t = 'int', ctype = 'long long', cinit = '0', initNode = null, initObj = null;
         if (a) {
           if (a.type === 'StringLiteral') { t = 'string'; ctype = 'const char*'; cinit = cstr(a.value); }
           else if (a.type === 'BooleanLiteral') { t = 'bool'; cinit = a.value ? '1' : '0'; }
           else if (a.type === 'NumericLiteral') { if (Number.isInteger(a.value)) cinit = String(a.value); else { t = 'float'; ctype = 'double'; cinit = String(a.value); } }
           else if (a.type === 'ArrayExpression') { t = 'array'; ctype = null; cinit = null; } // array-of-records state
+          else if (a.type === 'ObjectExpression') { t = 'object'; ctype = null; cinit = null; initObj = a; } // object record state
           else { // non-literal init (e.g. ezy.call) → assigned in swiss_init
             initNode = a;
             if (a.type === 'CallExpression' && a.callee.type === 'MemberExpression' && a.callee.object.name === 'ezy') {
@@ -100,7 +103,7 @@ function emit(ast, opts) {
             }
           }
         }
-        cells.push({ name: valId.name, setter: setId.name, ctype, cinit, t, initNode });
+        cells.push({ name: valId.name, setter: setId.name, ctype, cinit, t, initNode, initObj });
       } else if (init && init.type === 'CallExpression' && init.callee.name === 'useMemo') {
         // derived value: const x = useMemo(() => expr, [deps]) → recomputed cell
         const arrow = init.arguments[0];
@@ -111,14 +114,26 @@ function emit(ast, opts) {
         cells.push({ name: d.id.name, setter: '__memo_' + d.id.name, ctype: 'long long', cinit: null, t: 'int', initNode: valExpr, isMemo: true, memoDeps });
       } else if (init && init.type === 'CallExpression' && init.callee.name === 'useCallback') {
         methods.push({ name: d.id.name, node: init.arguments[0] });
+      } else if (init && init.type === 'CallExpression' && init.callee.name === 'useRef') {
+        const a = init.arguments[0];
+        let rt = 'int', rc = 'long long', ci = '0';
+        if (a) {
+          if (a.type === 'StringLiteral') { rt = 'string'; rc = 'const char*'; ci = cstr(a.value); }
+          else if (a.type === 'NullLiteral') { rt = 'widget'; rc = 'GtkWidget*'; ci = 'NULL'; }
+          else if (a.type === 'NumericLiteral') { ci = String(a.value); }
+        }
+        refs.push({ name: d.id.name, t: rt, ctype: rc, cinit: ci });
       } else if (init && (init.type === 'ArrowFunctionExpression' || init.type === 'FunctionExpression')) {
         methods.push({ name: d.id.name, node: init });
+      } else if (init && d.id.type === 'Identifier') {
+        derived[d.id.name] = init; // derived value: inlined where used, reactive via its cells
       }
     }
   }
   const cellByName = (n) => cells.find((c) => c.name === n);
   const cellBySetter = (n) => cells.find((c) => c.setter === n);
   const methodByName = (n) => methods.find((m) => m.name === n);
+  const refByName = (n) => refs.find((r) => r.name === n);
 
   // custom (presentational) components defined at module level — inlined on use
   const returnsJSX = (fn) => {
@@ -139,6 +154,7 @@ function emit(ast, opts) {
   // array-of-records state: infer element shape from object literals in setX(...)
   const tInfer = (node) => {
     if (!node) return 'int';
+    try { const t = cexpr(node, {}).t; if (t && t !== 'void') return t; } catch (e) { /* fall back */ }
     if (node.type === 'StringLiteral') return 'string';
     if (node.type === 'BooleanLiteral') return 'bool';
     if (node.type === 'NumericLiteral') return Number.isInteger(node.value) ? 'int' : 'float';
@@ -159,6 +175,16 @@ function emit(ast, opts) {
     c.struct = `Item_${c.name}`; c.arrtype = `Arr_${c.name}`; c.ctype = c.arrtype;
   }
   const arrayCells = cells.filter((c) => c.t === 'array');
+  // object record state: infer shape from init {…} + setX({…}) literals
+  for (const c of cells.filter((x) => x.t === 'object')) {
+    const fields = {};
+    const collect = (obj) => { for (const p of obj.properties) if ((p.type === 'ObjectProperty' || p.type === 'Property') && p.key) { const k = p.key.name || p.key.value; if (!(k in fields)) fields[k] = tInfer(p.value); } };
+    if (c.initObj) collect(c.initObj);
+    walk(comp, (n) => { if (n.type === 'CallExpression' && n.callee.type === 'Identifier' && n.callee.name === c.setter) walk(n, (o) => { if (o.type === 'ObjectExpression') collect(o); }); });
+    c.fields = Object.keys(fields).map((k) => ({ name: k, t: fields[k], ctype: cType(fields[k]) }));
+    c.struct = `Obj_${c.name}`; c.ctype = c.struct;
+  }
+  const objectCells = cells.filter((c) => c.t === 'object');
 
   // dependency snippets per cell (run by swiss_update_<cell>)
   const deps = {}; cells.forEach((c) => (deps[c.name] = []));
@@ -183,14 +209,20 @@ function emit(ast, opts) {
         if (scope[node.name]) return { c: scope[node.name].c, t: scope[node.name].t };
         const cell = cellByName(node.name);
         if (cell) return { c: 's->' + cell.name, t: cell.t };
+        if (derived[node.name]) return cexpr(derived[node.name], scope); // inline derived value
         err(`unknown identifier '${node.name}'`, node);
         break;
       }
       case 'ParenthesizedExpression': return cexpr(node.expression, scope);
+      case 'OptionalMemberExpression':
       case 'MemberExpression': {
         // event value: e.target.value inside an Input onChange arrow
         if (node.property.name === 'value' && node.object.type === 'MemberExpression' && node.object.property.name === 'target' && scope.__evtext)
           return { c: scope.__evtext, t: 'string' };
+        // useRef .current
+        if (node.property.name === 'current' && node.object.type === 'Identifier' && refByName(node.object.name)) {
+          const r = refByName(node.object.name); return { c: `s->${r.name}__current`, t: r.t === 'widget' ? 'int' : r.t };
+        }
         // record field: it.field where scope[it].rec is set by .map/.filter
         if (node.object.type === 'Identifier' && scope[node.object.name] && scope[node.object.name].rec) {
           const r = scope[node.object.name]; const f = (r.shape || []).find((x) => x.name === node.property.name);
@@ -199,6 +231,19 @@ function emit(ast, opts) {
         // array.length
         if (node.object.type === 'Identifier' && cellByName(node.object.name) && cellByName(node.object.name).t === 'array' && node.property.name === 'length')
           return { c: `s->${node.object.name}.len`, t: 'int' };
+        // arr.filter(pred).length → filtered count (GCC statement expression)
+        if (node.property.name === 'length' && node.object.type === 'CallExpression' && node.object.callee.type === 'MemberExpression' &&
+            node.object.callee.property.name === 'filter' && node.object.callee.object.type === 'Identifier' &&
+            cellByName(node.object.callee.object.name) && cellByName(node.object.callee.object.name).t === 'array') {
+          const cell = cellByName(node.object.callee.object.name); const arrow = node.object.arguments[0];
+          const fs = {}; if (arrow.params[0]) fs[arrow.params[0].name] = { rec: `s->${cell.name}.data[_i]`, shape: cell.fields };
+          return { c: `({ long long _c = 0; for (long long _i = 0; _i < s->${cell.name}.len; _i++) if (${cexpr(stripParens(arrow.body), fs).c}) _c++; _c; })`, t: 'int' };
+        }
+        // object-cell field: obj.field
+        if (node.object.type === 'Identifier' && cellByName(node.object.name) && cellByName(node.object.name).t === 'object') {
+          const oc = cellByName(node.object.name); const f = (oc.fields || []).find((x) => x.name === node.property.name);
+          return { c: `s->${oc.name}.${node.property.name}`, t: f ? f.t : 'int' };
+        }
         // props.x inside an inlined component
         if (node.object.name === 'props' && scope.__props && scope.__props[node.property.name]) return scope.__props[node.property.name];
         if (node.property.name === 'length') { const o = cexpr(node.object, scope); return { c: `((long long)strlen(${o.c}))`, t: 'int' }; }
@@ -217,8 +262,8 @@ function emit(ast, opts) {
       }
       case 'LogicalExpression': {
         const l = cexpr(node.left, scope), r = cexpr(node.right, scope);
-        const op = node.operator === '&&' ? '&&' : '||';
-        return { c: `(${l.c} ${op} ${r.c})`, t: 'bool' };
+        if (node.operator === '??') return { c: `(${l.c} ? ${l.c} : ${r.c})`, t: r.t };
+        return { c: `(${l.c} ${node.operator === '&&' ? '&&' : '||'} ${r.c})`, t: 'bool' };
       }
       case 'BinaryExpression': {
         const l = cexpr(node.left, scope), r = cexpr(node.right, scope);
@@ -245,16 +290,33 @@ function emit(ast, opts) {
         });
         return { c: `g_strdup_printf(${cstr(fmt)}${args.length ? ', ' + args.join(', ') : ''})`, t: 'string' };
       }
+      case 'OptionalCallExpression':
       case 'CallExpression': {
         const c = node.callee;
-        // builtins int()/str()
-        if (c.type === 'Identifier' && c.name === 'int') {
+        // builtins int()/str()/parseInt/parseFloat/Number
+        if (c.type === 'Identifier' && (c.name === 'int' || c.name === 'parseInt')) {
           const a = cexpr(node.arguments[0], scope);
           return { c: a.t === 'string' ? `atoll(${a.c})` : `((long long)${a.c})`, t: 'int' };
+        }
+        if (c.type === 'Identifier' && c.name === 'parseFloat') {
+          const a = cexpr(node.arguments[0], scope);
+          return { c: a.t === 'string' ? `atof(${a.c})` : `((double)${a.c})`, t: 'float' };
+        }
+        if (c.type === 'Identifier' && c.name === 'Number') {
+          const a = cexpr(node.arguments[0], scope);
+          return { c: a.t === 'string' ? `atoll(${a.c})` : `(${a.c})`, t: 'int' };
         }
         if (c.type === 'Identifier' && c.name === 'str') {
           const a = cexpr(node.arguments[0], scope);
           return { c: `g_strdup_printf("%lld", (long long)(${a.c}))`, t: 'string' };
+        }
+        // Math.*
+        if (c.type === 'MemberExpression' && c.object.name === 'Math') {
+          const A = node.arguments.map((x) => cexpr(x, scope).c);
+          const m = c.property.name;
+          const mm = { floor: 'floor', ceil: 'ceil', round: 'round', abs: 'fabs', sqrt: 'sqrt', pow: 'pow', min: 'fmin', max: 'fmax' }[m];
+          if (mm) return { c: `((long long)${mm}(${A.map((x) => `(double)(${x})`).join(', ')}))`, t: 'int' };
+          if (m === 'random') return { c: `(rand() / (double)RAND_MAX)`, t: 'float' };
         }
         // ezy.call('fn', args…)
         if (c.type === 'MemberExpression' && c.object.name === 'ezy' && c.property.name === 'call') {
@@ -264,17 +326,38 @@ function emit(ast, opts) {
           const ret = sigs[fn] ? sigs[fn].ret : 'int';
           return { c: `${fn}(${args.join(', ')})`, t: ret === 'string' ? 'string' : ret === 'void' ? 'void' : 'int' };
         }
-        // swiss.pickFolder() / swiss.setTheme(x)
+        // swiss.* host builtins
         if (c.type === 'MemberExpression' && c.object.name === 'swiss') {
           if (c.property.name === 'pickFolder') return { c: 'swiss_pick_folder()', t: 'string' };
-          if (c.property.name === 'setTheme') { const a = cexpr(node.arguments[0], scope); return { c: `swiss_set_theme(${a.c})`, t: 'void' }; }
+          if (c.property.name === 'pickFile') return { c: 'swiss_pick_file()', t: 'string' };
+          if (c.property.name === 'setTheme') return { c: `swiss_set_theme(${cexpr(node.arguments[0], scope).c})`, t: 'void' };
+          if (c.property.name === 'alert') return { c: `swiss_alert(${cexpr(node.arguments[0], scope).c})`, t: 'void' };
+          if (c.property.name === 'confirm') return { c: `swiss_confirm(${cexpr(node.arguments[0], scope).c})`, t: 'bool' };
         }
-        // string methods: x.trim()/.toUpperCase()/.toLowerCase()
+        // timers: setInterval/setTimeout(fn, ms) → g_timeout_add; clearInterval(id)
+        if (c.type === 'Identifier' && (c.name === 'setInterval' || c.name === 'setTimeout')) {
+          const tl = []; genStmts(node.arguments[0].body, { ...scope }, tl);
+          const id = `timer_${hN++}`;
+          out.fns.push(`static gboolean ${id}(gpointer ud) {\n  SwissState* s = (SwissState*)ud; (void)s;\n${tl.join('\n')}\n  return ${c.name === 'setInterval' ? 'G_SOURCE_CONTINUE' : 'G_SOURCE_REMOVE'};\n}`);
+          return { c: `g_timeout_add(${cexpr(node.arguments[1], scope).c}, ${id}, &S)`, t: 'int' };
+        }
+        if (c.type === 'Identifier' && (c.name === 'clearInterval' || c.name === 'clearTimeout'))
+          return { c: `g_source_remove(${cexpr(node.arguments[0], scope).c})`, t: 'void' };
+        // string methods
         if (c.type === 'MemberExpression') {
           const recv = cexpr(c.object, scope), m = c.property.name;
+          const a0 = node.arguments[0] ? cexpr(node.arguments[0], scope).c : null;
+          const a1 = node.arguments[1] ? cexpr(node.arguments[1], scope).c : null;
           if (m === 'trim') return { c: `g_strstrip(g_strdup(${recv.c}))`, t: 'string' };
           if (m === 'toUpperCase') return { c: `g_ascii_strup(${recv.c}, -1)`, t: 'string' };
           if (m === 'toLowerCase') return { c: `g_ascii_strdown(${recv.c}, -1)`, t: 'string' };
+          if (m === 'includes') return { c: `(strstr(${recv.c}, ${a0}) != NULL)`, t: 'bool' };
+          if (m === 'startsWith') return { c: `g_str_has_prefix(${recv.c}, ${a0})`, t: 'bool' };
+          if (m === 'endsWith') return { c: `g_str_has_suffix(${recv.c}, ${a0})`, t: 'bool' };
+          if (m === 'indexOf') return { c: `swiss_indexof(${recv.c}, ${a0})`, t: 'int' };
+          if (m === 'substring' || m === 'slice') return { c: `swiss_substr(${recv.c}, ${a0}, ${a1 || '-1'})`, t: 'string' };
+          if (m === 'replace' || m === 'replaceAll') return { c: `swiss_replace(${recv.c}, ${a0}, ${a1})`, t: 'string' };
+          if (m === 'repeat') return { c: `g_strnfill(0, ' ')`, t: 'string' }; // (rare; placeholder)
         }
         err('unsupported call expression', node); break;
       }
@@ -304,8 +387,47 @@ function emit(ast, opts) {
       lines.push('  }');
       return;
     }
+    if (st.type === 'ReturnStatement') return; // void methods / effect cleanup
+    if (st.type === 'BreakStatement') { lines.push('  break;'); return; }
+    if (st.type === 'ContinueStatement') { lines.push('  continue;'); return; }
+    if (st.type === 'SwitchStatement') {
+      const d = cexpr(st.discriminant, scope);
+      if (d.t === 'string') err('switch on a string is not supported (use if/else)', st);
+      lines.push(`  switch (${d.c}) {`);
+      for (const cs of st.cases) {
+        lines.push(cs.test ? `  case ${cexpr(cs.test, scope).c}:` : '  default:');
+        for (const s2 of cs.consequent) genStmt(s2, scope, lines);
+      }
+      lines.push('  }');
+      return;
+    }
+    if (st.type === 'ForStatement' || st.type === 'WhileStatement') {
+      if (st.type === 'WhileStatement') lines.push(`  while (${cexpr(st.test, scope).c}) {`);
+      else {
+        const sc = { ...scope };
+        let initS = '';
+        if (st.init && st.init.type === 'VariableDeclaration') { const d = st.init.declarations[0]; sc[d.id.name] = { c: d.id.name, t: 'int' }; initS = `long long ${d.id.name} = ${cexpr(d.init, sc).c}`; }
+        const test = st.test ? cexpr(st.test, sc).c : '1';
+        const upd = st.update ? `${st.update.argument ? cexpr(st.update.argument, sc).c : ''}${st.update.operator || ''}` : '';
+        lines.push(`  for (${initS}; ${test}; ${st.update && st.update.type === 'UpdateExpression' ? cexpr(st.update.argument, sc).c + st.update.operator : (st.update ? cexpr(st.update, sc).c : '')}) {`);
+        scope = sc;
+      }
+      genStmts(st.body, scope, lines);
+      lines.push('  }');
+      return;
+    }
     if (st.type === 'ExpressionStatement') {
       const e = st.expression;
+      // assignment: local = v / local += v / ref.current = v
+      if (e.type === 'AssignmentExpression') {
+        const v = cexpr(e.right, scope);
+        if (e.left.type === 'MemberExpression' && e.left.property.name === 'current' && refByName(e.left.object.name)) {
+          lines.push(`  s->${e.left.object.name}__current ${e.operator} ${v.c};`); return;
+        }
+        if (e.left.type === 'Identifier' && scope[e.left.name]) { lines.push(`  ${e.left.name} ${e.operator} ${v.c};`); return; }
+        err('unsupported assignment target', e);
+      }
+      if (e.type === 'UpdateExpression' && e.argument.type === 'Identifier' && scope[e.argument.name]) { lines.push(`  ${e.argument.name}${e.operator};`); return; }
       // ignore e.preventDefault() / e.stopPropagation()
       if (e.type === 'CallExpression' && e.callee.type === 'MemberExpression' &&
           (e.callee.property.name === 'preventDefault' || e.callee.property.name === 'stopPropagation')) return;
@@ -313,7 +435,26 @@ function emit(ast, opts) {
       if (e.type === 'CallExpression' && e.callee.type === 'Identifier' && cellBySetter(e.callee.name)) {
         const cell = cellBySetter(e.callee.name);
         if (cell.t === 'array') { genArraySet(cell, e.arguments[0], scope, lines); lines.push(`  swiss_update_${cell.name}(s);`); return; }
-        const v = cexpr(e.arguments[0], scope);
+        if (cell.t === 'object') {
+          const o = e.arguments[0];
+          if (o.type !== 'ObjectExpression') err('setObject expects an object literal', o);
+          for (const p of o.properties) {
+            if (p.type === 'SpreadElement') continue; // {...obj} keeps the rest
+            const fn = p.key.name || p.key.value;
+            const f = cell.fields.find((x) => x.name === fn);
+            const v = cexpr(p.value, scope);
+            lines.push(`  s->${cell.name}.${fn} = ${f && f.t === 'string' ? `g_strdup(${v.c})` : v.c};`);
+          }
+          lines.push(`  swiss_update_${cell.name}(s);`); return;
+        }
+        const arg = e.arguments[0];
+        // functional updater: setX(prev => expr)
+        if (arg.type === 'ArrowFunctionExpression') {
+          const sc = { ...scope }; if (arg.params[0]) sc[arg.params[0].name] = { c: `s->${cell.name}`, t: cell.t };
+          const ve = arg.body.type === 'BlockStatement' ? (arg.body.body.find((s) => s.type === 'ReturnStatement') || {}).argument : arg.body;
+          lines.push(`  s->${cell.name} = ${cexpr(ve, sc).c};`); lines.push(`  swiss_update_${cell.name}(s);`); return;
+        }
+        const v = cexpr(arg, scope);
         lines.push(`  s->${cell.name} = ${v.c};`);
         lines.push(`  swiss_update_${cell.name}(s);`);
         return;
@@ -504,8 +645,7 @@ function emit(ast, opts) {
       if (ch.type === 'JSXText') { const t = ch.value.replace(/\s+/g, ' '); if (t.trim() !== '') parts.push({ lit: t }); }
       else if (ch.type === 'JSXExpressionContainer' && ch.expression.type !== 'JSXEmptyExpression') {
         const v = cexpr(ch.expression, scope); parts.push({ expr: v.c, t: v.t }); dynamic = true;
-        // collect cell reads for dependency tracking
-        walk(ch.expression, (n) => { if (n.type === 'Identifier' && cellByName(n.name)) reads.add(n.name); });
+        cellsIn(ch.expression).forEach((c) => reads.add(c)); // dep tracking (follows derived)
       }
     }
     let fmt = ''; const args = [];
@@ -577,6 +717,11 @@ function emit(ast, opts) {
     if (name === 'Text') {
       const info = textSnippet(el, scope, '');
       if (info.dynamic) {
+        if (scope.__inrow) {  // inside a list/map row → built fresh on each rebuild (no shared state field / dep)
+          const f = vid('t'); out.build.push(`  GtkWidget* ${f} = gtk_label_new("");`);
+          out.build.push(`  ${textSnippet(el, scope, f).snippet}`);
+          applyStyle(f, st); addClass(f); pack(f); return f;
+        }
         const f = vid('lbl'); stateFields.push(`  GtkWidget* ${f};`);
         out.build.push(`  s->${f} = gtk_label_new("");`);
         const real = textSnippet(el, scope, `s->${f}`);   // snippet bound to the real target
@@ -736,11 +881,37 @@ function emit(ast, opts) {
       }
       applyStyle(`s->${w}`, st); addClass(`s->${w}`); pack(`s->${w}`); return `s->${w}`;
     }
+    if (name === 'Spinner') {
+      const w = vid('sp');
+      out.build.push(`  GtkWidget* ${w} = gtk_spinner_new();`);
+      out.build.push(`  gtk_spinner_start(GTK_SPINNER(${w}));`);
+      applyStyle(w, st); pack(w); return w;
+    }
+    if (name === 'Calendar') {
+      const w = vid('cal');
+      out.build.push(`  GtkWidget* ${w} = gtk_calendar_new();`);
+      applyStyle(w, st); addClass(w); pack(w); return w;
+    }
+    if (name === 'Expander') {
+      const w = vid('exp');
+      out.build.push(`  GtkWidget* ${w} = gtk_expander_new(${cstr(strAttr(a.title))});`);
+      const inner = vid('v');
+      out.build.push(`  GtkWidget* ${inner} = gtk_box_new(GTK_ORIENTATION_VERTICAL, ${Number((st && st.gap) || 4)});`);
+      buildChildren(el.children, inner, scope);
+      out.build.push(`  gtk_container_add(GTK_CONTAINER(${w}), ${inner});`);
+      applyStyle(w, st); addClass(w); pack(w); return w;
+    }
     err(`unsupported component <${name}>`, el);
   }
 
   // children loop: real elements + conditional expression children
-  const cellsIn = (node) => { const s = new Set(); walk(node, (n) => { if (n.type === 'Identifier' && cellByName(n.name)) s.add(n.name); }); return s; };
+  // all state cells an expression depends on (follows derived consts)
+  const cellsIn = (node) => {
+    const s = new Set();
+    const visit = (n) => walk(n, (x) => { if (x.type === 'Identifier') { if (cellByName(x.name)) s.add(x.name); else if (derived[x.name]) visit(derived[x.name]); } });
+    visit(node);
+    return s;
+  };
   const jsxOf = (n) => { n = stripParens(n); return n && (n.type === 'JSXElement' || n.type === 'JSXFragment') ? n : null; };
   function buildChildren(children, parentVar, scope) {
     for (const ch of children) {
@@ -752,24 +923,35 @@ function emit(ast, opts) {
             (ex.type === 'MemberExpression' && ex.object.name === 'props' && ex.property.name === 'children'))) {
           buildChildren(scope.__children.nodes, parentVar, scope.__children.scope); continue;
         }
-        if (ex.type === 'CallExpression' && ex.callee.type === 'MemberExpression' && ex.callee.property.name === 'map' &&
-            ex.callee.object.type === 'Identifier' && cellByName(ex.callee.object.name) && cellByName(ex.callee.object.name).t === 'array') {
-          buildMap(ex, parentVar, scope); continue;
+        if (ex.type === 'CallExpression' && ex.callee.type === 'MemberExpression' && ex.callee.property.name === 'map') {
+          const o = ex.callee.object;
+          // arr.map(...)
+          if (o.type === 'Identifier' && cellByName(o.name) && cellByName(o.name).t === 'array') { buildMap(ex, parentVar, scope, o.name, null); continue; }
+          // arr.filter(pred).map(...)
+          if (o.type === 'CallExpression' && o.callee.type === 'MemberExpression' && o.callee.property.name === 'filter' &&
+              o.callee.object.type === 'Identifier' && cellByName(o.callee.object.name) && cellByName(o.callee.object.name).t === 'array') {
+            buildMap(ex, parentVar, scope, o.callee.object.name, o.arguments[0]); continue;
+          }
         }
         buildCond(ch.expression, parentVar, scope);
       }
     }
   }
-  // {arr.map((it) => <JSX>)} → a box rebuilt from the array cell; rows access it.field
-  function buildMap(ex, parent, scope) {
-    const cell = cellByName(ex.callee.object.name);
+  // {arr.map((it,i)=><JSX>)} or {arr.filter(p).map(...)} → box rebuilt from the array
+  function buildMap(ex, parent, scope, arrName, filterArrow) {
+    const cell = cellByName(arrName);
     const itName = ex.arguments[0].params[0] ? ex.arguments[0].params[0].name : 'it';
+    const idxParam = ex.arguments[0].params[1] ? ex.arguments[0].params[1].name : null;
     const itemJSX = stripParens(ex.arguments[0].body);
     const box = vid('map'); stateFields.push(`  GtkWidget* ${box};`);
     out.build.push(`  s->${box} = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);`);
     if (parent) out.build.push(`  gtk_box_pack_start(GTK_BOX(${parent}), s->${box}, FALSE, FALSE, 0);`);
-    out.lists.push({ kind: 'map', box, rowFn: `swiss_map_${out.lists.length}`, rebuildFn: `swiss_maprebuild_${out.lists.length}`, itemJSX, itName, cell });
-    deps[cell.name].push(`${out.lists[out.lists.length - 1].rebuildFn}(s);`);
+    out.lists.push({ kind: 'map', box, rowFn: `swiss_map_${out.lists.length}`, rebuildFn: `swiss_maprebuild_${out.lists.length}`, itemJSX, itName, idxParam, cell, filterArrow });
+    const L = out.lists[out.lists.length - 1];
+    // rebuild when the array OR any cell the rows/filter read changes
+    const reads = cellsIn(itemJSX); reads.add(cell.name);
+    if (filterArrow) cellsIn(filterArrow.body).forEach((c) => reads.add(c));
+    reads.forEach((cn) => { if (deps[cn] && !deps[cn].includes(`${L.rebuildFn}(s);`)) deps[cn].push(`${L.rebuildFn}(s);`); });
   }
   // inline a presentational component: bind its props (from JSX attrs) and build its JSX
   function inlineComponent(comp, el, parent, callerScope) {
@@ -798,6 +980,23 @@ function emit(ast, opts) {
   const stash = (w) => { const f = vid('cond'); stateFields.push(`  GtkWidget* ${f};`); out.build.push(`  s->${f} = ${w};`); return `s->${f}`; };
   function buildCond(expr, parentVar, scope) {
     expr = stripParens(expr);
+    // inside a list/map row: wrap the element build in a runtime C `if` (the whole
+    // row is rebuilt, so no persistent widget/visibility tracking is needed)
+    if (scope.__inrow) {
+      if (expr.type === 'LogicalExpression' && expr.operator === '&&') {
+        const el = jsxOf(expr.right); if (!el) return;
+        const at = out.build.length; build(el, parentVar, scope); const sl = out.build.splice(at);
+        out.build.push(`  if (${cexpr(expr.left, scope).c}) {`, ...sl, '  }'); return;
+      }
+      if (expr.type === 'ConditionalExpression') {
+        const ae = jsxOf(expr.consequent), be = jsxOf(expr.alternate);
+        if (ae && be) {
+          const at = out.build.length; build(ae, parentVar, scope); const sa = out.build.splice(at);
+          build(be, parentVar, scope); const sb = out.build.splice(at);
+          out.build.push(`  if (${cexpr(expr.test, scope).c}) {`, ...sa, '  } else {', ...sb, '  }'); return;
+        }
+      }
+    }
     if (expr.type === 'LogicalExpression' && expr.operator === '&&') {
       const el = jsxOf(expr.right); if (!el) return;
       const w = stash(build(el, parentVar, scope));
@@ -823,15 +1022,21 @@ function emit(ast, opts) {
   function emitLists() {
     for (const L of out.lists) {
       const saved = out.build; out.build = [];
-      let idxVar, jsx, rowScope, countC;
+      let idxVar, jsx, rowScope, countC, skip = '';
       if (L.kind === 'map') {
         idxVar = '_mi';
-        rowScope = { __index: { c: idxVar, t: 'int' }, __indexName: idxVar };
+        rowScope = { __index: { c: idxVar, t: 'int' }, __indexName: idxVar, __inrow: true };
         rowScope[L.itName] = { rec: `s->${L.cell.name}.data[${idxVar}]`, shape: L.cell.fields };
+        if (L.idxParam) rowScope[L.idxParam] = { c: idxVar, t: 'int' };
         jsx = L.itemJSX; countC = `s->${L.cell.name}.len`;
+        if (L.filterArrow) {
+          const fs = { ...rowScope }; const fp = L.filterArrow.params[0];
+          if (fp) fs[fp.name] = { rec: `s->${L.cell.name}.data[${idxVar}]`, shape: L.cell.fields };
+          skip = `    if (!(${cexpr(stripParens(L.filterArrow.body), fs).c})) continue;\n`;
+        }
       } else {
         idxVar = L.idxName;
-        rowScope = { __index: { c: idxVar, t: 'int' }, __indexName: idxVar };
+        rowScope = { __index: { c: idxVar, t: 'int' }, __indexName: idxVar, __inrow: true };
         rowScope[idxVar] = { c: idxVar, t: 'int' };
         jsx = L.itemFn.body; countC = L.countCell ? 's->' + L.countCell.name : '0';
       }
@@ -844,6 +1049,7 @@ function emit(ast, opts) {
         `  for (GList* it = ch; it; it = it->next) gtk_widget_destroy(GTK_WIDGET(it->data));\n` +
         `  g_list_free(ch);\n` +
         `  for (long long ${idxVar} = 0; ${idxVar} < ${countC}; ${idxVar}++) {\n` +
+        skip +
         `    gtk_box_pack_start(GTK_BOX(s->${L.box}), ${L.rowFn}(s, ${idxVar}), FALSE, FALSE, 0);\n` +
         `  }\n  gtk_widget_show_all(s->${L.box});\n}`
       );
@@ -881,6 +1087,13 @@ function emit(ast, opts) {
 
   // non-literal useState inits (e.g. useState(ezy.call(...))) → set in swiss_init
   const initCellLines = cells.filter((c) => c.initNode).map((c) => `  s->${c.name} = ${cexpr(c.initNode, {}).c};`);
+  // object-state inits: per-field from the {…} literal
+  for (const c of objectCells)
+    if (c.initObj) for (const p of c.initObj.properties) {
+      if (p.type === 'SpreadElement' || !p.key) continue;
+      const fn = p.key.name || p.key.value; const f = c.fields.find((x) => x.name === fn);
+      initCellLines.push(`  s->${c.name}.${fn} = ${f && f.t === 'string' ? `g_strdup(${cexpr(p.value, {}).c})` : cexpr(p.value, {}).c};`);
+    }
 
   // cell update functions
   for (const c of cells)
@@ -901,6 +1114,7 @@ function emit(ast, opts) {
 
 ${externDecls || '// (no ezy backend calls)'}
 
+${objectCells.map((c) => `typedef struct { ${c.fields.map((f) => `${f.ctype} ${f.name};`).join(' ') || 'int _u;'} } ${c.struct};`).join('\n')}
 ${arrayCells.map((c) =>
   `typedef struct { ${c.fields.map((f) => `${f.ctype} ${f.name};`).join(' ') || 'int _u;'} } ${c.struct};\n` +
   `typedef struct { ${c.struct}* data; long long len, cap; } ${c.arrtype};\n` +
@@ -909,12 +1123,21 @@ ${arrayCells.map((c) =>
 
 typedef struct {
 ${cells.map((c) => `  ${c.ctype} ${c.name};`).join('\n') || '  int _u;'}
+${refs.map((r) => `  ${r.ctype} ${r.name}__current;`).join('\n')}
 ${stateFields.join('\n')}
 } SwissState;
 
 static SwissState S;
 
 static char* swiss_concat(const char* a, const char* b) { return g_strconcat(a, b, NULL); }
+static long long swiss_indexof(const char* s, const char* sub) { const char* p = strstr(s, sub); return p ? (long long)(p - s) : -1; }
+static char* swiss_substr(const char* s, long long a, long long b) {
+  long long n = (long long)strlen(s); if (a < 0) a = 0; if (b < 0 || b > n) b = n; if (b < a) b = a;
+  return g_strndup(s + a, (gsize)(b - a));
+}
+static char* swiss_replace(const char* s, const char* from, const char* to) {
+  char** parts = g_strsplit(s, from, -1); char* r = g_strjoinv(to, parts); g_strfreev(parts); return r;
+}
 static char* swiss_pick_folder(void) {
   GtkWidget* d = gtk_file_chooser_dialog_new("Elegir carpeta", NULL,
     GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, "Cancelar", GTK_RESPONSE_CANCEL,
@@ -926,6 +1149,26 @@ static char* swiss_pick_folder(void) {
   }
   gtk_widget_destroy(d);
   return res;
+}
+static char* swiss_pick_file(void) {
+  GtkWidget* d = gtk_file_chooser_dialog_new("Elegir archivo", NULL,
+    GTK_FILE_CHOOSER_ACTION_OPEN, "Cancelar", GTK_RESPONSE_CANCEL, "Abrir", GTK_RESPONSE_ACCEPT, NULL);
+  char* res = g_strdup("");
+  if (gtk_dialog_run(GTK_DIALOG(d)) == GTK_RESPONSE_ACCEPT) {
+    char* p = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(d));
+    if (p) { g_free(res); res = g_strdup(p); g_free(p); }
+  }
+  gtk_widget_destroy(d);
+  return res;
+}
+static void swiss_alert(const char* msg) {
+  GtkWidget* d = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_OK, "%s", msg);
+  gtk_dialog_run(GTK_DIALOG(d)); gtk_widget_destroy(d);
+}
+static long long swiss_confirm(const char* msg) {
+  GtkWidget* d = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO, "%s", msg);
+  int r = gtk_dialog_run(GTK_DIALOG(d)); gtk_widget_destroy(d);
+  return r == GTK_RESPONSE_YES ? 1 : 0;
 }
 static void swiss_set_theme(long long light) {
   g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme", (gboolean)!light, NULL);
@@ -962,6 +1205,7 @@ int main(int argc, char** argv) {
   swiss_set_theme(0);
   swiss_apply_css();
 ${cells.filter((c) => c.cinit != null).map((c) => `  S.${c.name} = ${c.cinit};`).join('\n')}
+${refs.map((r) => `  S.${r.name}__current = ${r.cinit};`).join('\n')}
   swiss_init(&S);
   GtkWidget* win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   gtk_window_set_title(GTK_WINDOW(win), ${cstr(opts.title || 'Swiss')});
