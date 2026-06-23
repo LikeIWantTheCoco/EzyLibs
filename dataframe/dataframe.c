@@ -832,3 +832,235 @@ long long df_value_counts(long long h, const char *col) {
     if (!g) return 0;
     return df_sort(g, "count", 0);
 }
+
+/* ── v1.2: missing data, cumulative/rolling, transforms, pivot ─────
+ * All return a NEW handle and never mutate the source.
+ */
+
+/* drop rows where the column is empty (numeric NaN or blank text) */
+long long df_dropna(long long h, const char *col) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    long long *idx = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(long long));
+    long long m = 0;
+    for (long long r = 0; r < d->nrows; r++) {
+        const char *s = d->cols[c].strs[r];
+        if (s && s[0] != '\0') idx[m++] = r;
+    }
+    DataFrame *r = df_copy_rows(d, idx, m); free(idx);
+    return df_register(r);
+}
+
+/* fill empty cells of a numeric column with `value` */
+long long df_fillna(long long h, const char *col, double value) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    DataFrame *r = df_clone_all(d);
+    char buf[64]; fmt_num(value, buf, sizeof buf);
+    for (long long row = 0; row < r->nrows; row++) {
+        if (r->cols[c].strs[row][0] == '\0') {
+            free(r->cols[c].strs[row]);
+            r->cols[c].strs[row] = dup_str(buf);
+            r->cols[c].nums[row] = value;
+        }
+    }
+    return df_register(r);
+}
+
+/* fill empty cells of a column with `text` */
+long long df_fillna_str(long long h, const char *col, const char *text) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    DataFrame *r = df_clone_all(d);
+    for (long long row = 0; row < r->nrows; row++)
+        if (r->cols[c].strs[row][0] == '\0') {
+            free(r->cols[c].strs[row]);
+            r->cols[c].strs[row] = dup_str(text);
+        }
+    df_finalize_types(r);
+    return df_register(r);
+}
+
+/* helper: clone source and append a computed numeric column */
+static long long df_emit_with(DataFrame *d, const char *newcol, double *vals) {
+    DataFrame *r = df_clone_all(d);
+    df_push_numeric_col(r, newcol, vals);
+    free(vals);
+    return df_register(r);
+}
+
+long long df_cumsum(long long h, const char *col) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    double *v = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(double));
+    double acc = 0;
+    for (long long r = 0; r < d->nrows; r++) {
+        double x = d->cols[c].nums[r];
+        if (!isnan(x)) acc += x;
+        v[r] = acc;
+    }
+    char nm[256]; snprintf(nm, sizeof nm, "%s_cumsum", col);
+    return df_emit_with(d, nm, v);
+}
+
+long long df_rolling_mean(long long h, const char *col, long long window) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0 || window < 1) return 0;
+    double *v = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(double));
+    for (long long r = 0; r < d->nrows; r++) {
+        if (r + 1 < window) { v[r] = NAN; continue; }
+        double s = 0; long long k = 0;
+        for (long long j = r - window + 1; j <= r; j++) {
+            double x = d->cols[c].nums[j];
+            if (!isnan(x)) { s += x; k++; }
+        }
+        v[r] = k ? s / (double)k : NAN;
+    }
+    char nm[256]; snprintf(nm, sizeof nm, "%s_roll%lld", col, window);
+    return df_emit_with(d, nm, v);
+}
+
+long long df_with_round(long long h, const char *newcol, const char *col, long long ndigits) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    double scale = pow(10.0, (double)ndigits);
+    double *v = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(double));
+    for (long long r = 0; r < d->nrows; r++) {
+        double x = d->cols[c].nums[r];
+        v[r] = isnan(x) ? NAN : round(x * scale) / scale;
+    }
+    return df_emit_with(d, newcol, v);
+}
+
+long long df_with_abs(long long h, const char *newcol, const char *col) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    double *v = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(double));
+    for (long long r = 0; r < d->nrows; r++) {
+        double x = d->cols[c].nums[r];
+        v[r] = isnan(x) ? NAN : fabs(x);
+    }
+    return df_emit_with(d, newcol, v);
+}
+
+long long df_with_clip(long long h, const char *newcol, const char *col, double lo, double hi) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    double *v = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(double));
+    for (long long r = 0; r < d->nrows; r++) {
+        double x = d->cols[c].nums[r];
+        if (isnan(x)) { v[r] = NAN; continue; }
+        v[r] = x < lo ? lo : (x > hi ? hi : x);
+    }
+    return df_emit_with(d, newcol, v);
+}
+
+/* ordinal rank (1 = smallest when ascending) of a numeric column;
+   NaN rows get NaN rank, ties broken by row order */
+long long df_rank(long long h, const char *newcol, const char *col, long long ascending) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    long long n = d->nrows;
+    long long *idx = malloc((size_t)(n > 0 ? n : 1) * sizeof(long long));
+    long long m = 0;
+    for (long long r = 0; r < n; r++) if (!isnan(d->cols[c].nums[r])) idx[m++] = r;
+    g_sort_df = d; g_sort_col = c; g_sort_asc = ascending ? 1 : 0; g_sort_numeric = 1;
+    qsort(idx, (size_t)m, sizeof(long long), cmp_rows);
+    double *v = malloc((size_t)(n > 0 ? n : 1) * sizeof(double));
+    for (long long r = 0; r < n; r++) v[r] = NAN;
+    for (long long k = 0; k < m; k++) v[idx[k]] = (double)(k + 1);
+    free(idx);
+    return df_emit_with(d, newcol, v);
+}
+
+/* distinct values of a column (first-seen order), as a one-column frame */
+long long df_unique(long long h, const char *col) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    char **seen = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(char *));
+    long long nu = 0;
+    for (long long r = 0; r < d->nrows; r++) {
+        const char *s = d->cols[c].strs[r];
+        int dup = 0;
+        for (long long j = 0; j < nu; j++) if (strcmp(seen[j], s) == 0) { dup = 1; break; }
+        if (!dup) seen[nu++] = (char *)s;
+    }
+    DataFrame *r = df_alloc(1, nu);
+    r->names[0] = dup_str(col);
+    for (long long i = 0; i < nu; i++) r->cols[0].strs[i] = dup_str(seen[i]);
+    free(seen);
+    df_finalize_types(r);
+    return df_register(r);
+}
+
+/* ── pivot table ───────────────────────────────────────────────────
+ * rows = distinct values of `index_col`, columns = distinct values of
+ * `columns_col`, cells = aggregate of `value_col`. agg: mean|sum|count|
+ * min|max.
+ */
+static double agg_list(const double *xs, long long n, const char *agg) {
+    if (!strcmp(agg, "count")) return (double)n;
+    if (n == 0) return NAN;
+    double s = xs[0], mn = xs[0], mx = xs[0];
+    for (long long i = 1; i < n; i++) { s += xs[i]; if (xs[i] < mn) mn = xs[i]; if (xs[i] > mx) mx = xs[i]; }
+    if (!strcmp(agg, "sum"))  return s;
+    if (!strcmp(agg, "mean")) return s / (double)n;
+    if (!strcmp(agg, "min"))  return mn;
+    if (!strcmp(agg, "max"))  return mx;
+    return NAN;
+}
+
+long long df_pivot(long long h, const char *index_col, const char *columns_col,
+                   const char *value_col, const char *agg) {
+    DataFrame *d = DF(h);
+    long long ic = col_index(d, index_col), cc = col_index(d, columns_col),
+              vc = col_index(d, value_col);
+    if (ic < 0 || cc < 0 || vc < 0) return 0;
+
+    /* distinct index + column keys (first-seen order) */
+    char **ridx = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(char *));
+    char **cidx = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(char *));
+    long long nr = 0, ncv = 0;
+    for (long long r = 0; r < d->nrows; r++) {
+        const char *iv = d->cols[ic].strs[r], *cv = d->cols[cc].strs[r];
+        int f = 0; for (long long j = 0; j < nr; j++) if (!strcmp(ridx[j], iv)) { f = 1; break; }
+        if (!f) ridx[nr++] = (char *)iv;
+        f = 0; for (long long j = 0; j < ncv; j++) if (!strcmp(cidx[j], cv)) { f = 1; break; }
+        if (!f) cidx[ncv++] = (char *)cv;
+    }
+
+    DataFrame *o = df_alloc(1 + ncv, nr);
+    o->names[0] = dup_str(index_col);
+    for (long long j = 0; j < ncv; j++) o->names[1 + j] = dup_str(cidx[j]);
+
+    double *bucket = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(double));
+    char buf[64];
+    for (long long i = 0; i < nr; i++) {
+        o->cols[0].strs[i] = dup_str(ridx[i]);
+        for (long long j = 0; j < ncv; j++) {
+            long long k = 0;
+            for (long long r = 0; r < d->nrows; r++) {
+                if (strcmp(d->cols[ic].strs[r], ridx[i]) != 0) continue;
+                if (strcmp(d->cols[cc].strs[r], cidx[j]) != 0) continue;
+                double x = d->cols[vc].nums[r];
+                if (!isnan(x) || !strcmp(agg, "count")) bucket[k++] = x;
+            }
+            double a = agg_list(bucket, k, agg);
+            fmt_num(a, buf, sizeof buf);
+            o->cols[1 + j].strs[i] = dup_str(buf);
+        }
+    }
+    free(bucket); free(ridx); free(cidx);
+    df_finalize_types(o);
+    return df_register(o);
+}

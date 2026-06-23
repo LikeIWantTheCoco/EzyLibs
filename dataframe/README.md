@@ -98,6 +98,24 @@ fn main():
 - `df_corr(h, a, b)` — Pearson correlation between two numeric columns
 - `df_quantile(h, col, q)` — quantile `q ∈ [0,1]`, linear interpolation
 
+### Missing data (new handle)
+- `df_dropna(h, col)` — drop rows where the column is empty
+- `df_fillna(h, col, value)` — fill empty numeric cells
+- `df_fillna_str(h, col, text)` — fill empty cells with text
+
+### Cumulative / rolling / element-wise (add a column, new handle)
+- `df_cumsum(h, col)` → adds `<col>_cumsum`
+- `df_rolling_mean(h, col, window)` → adds `<col>_rollN`
+- `df_with_round(h, newcol, col, ndigits)`
+- `df_with_abs(h, newcol, col)`
+- `df_with_clip(h, newcol, col, lo, hi)`
+- `df_rank(h, newcol, col, ascending)` — ordinal rank
+
+### Reshape extras (new handle)
+- `df_unique(h, col)` — distinct values as a one-column frame
+- `df_pivot(h, index_col, columns_col, value_col, agg)` — pivot table;
+  `agg` ∈ `"mean"`, `"sum"`, `"count"`, `"min"`, `"max"`
+
 ### Rendering
 - `df_print(h)` — pretty table to stdout (first 20 rows)
 - `df_to_string(h) -> string` — full table as text

@@ -82,6 +82,26 @@ extern fn df_merge(left: int, right: int, on: string) -> int   # inner join on a
 extern fn df_corr(h: int, a: string, b: string) -> float       # Pearson correlation
 extern fn df_quantile(h: int, col: string, q: float) -> float  # q in [0,1], linear interp
 
+# ── Missing data (return NEW handle) ──────────────────
+extern fn df_dropna(h: int, col: string) -> int                # drop rows where col is empty
+extern fn df_fillna(h: int, col: string, value: float) -> int  # fill empty numeric cells
+extern fn df_fillna_str(h: int, col: string, text: string) -> int
+
+# ── Cumulative / rolling (add a column, NEW handle) ───
+extern fn df_cumsum(h: int, col: string) -> int                # adds "<col>_cumsum"
+extern fn df_rolling_mean(h: int, col: string, window: int) -> int  # adds "<col>_rollN"
+
+# ── Element-wise transforms (add a column, NEW handle) ─
+extern fn df_with_round(h: int, newcol: string, col: string, ndigits: int) -> int
+extern fn df_with_abs(h: int, newcol: string, col: string) -> int
+extern fn df_with_clip(h: int, newcol: string, col: string, lo: float, hi: float) -> int
+extern fn df_rank(h: int, newcol: string, col: string, ascending: int) -> int
+
+# ── Reshape extras (return NEW handle) ────────────────
+extern fn df_unique(h: int, col: string) -> int                # distinct values, 1 column
+extern fn df_pivot(h: int, index_col: string, columns_col: string, value_col: string, agg: string) -> int
+# agg is one of "mean", "sum", "count", "min", "max"
+
 # ── Rendering ─────────────────────────────────────────
 extern fn df_print(h: int) -> int                    # pretty table to stdout (head 20)
 extern fn df_to_string(h: int) -> string             # full table as text
