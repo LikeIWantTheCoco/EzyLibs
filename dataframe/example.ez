@@ -1,0 +1,34 @@
+# dataframe example — run after `ezyl install dataframe`
+# Create example.csv next to this file, then: ezy run example.ez
+import "dataframe"
+
+fn main():
+{
+    df = df_read_csv("example.csv")
+    if df == 0:
+    {
+        print("could not read example.csv")
+        return 1
+    }
+
+    print("shape:", df_rows(df), "x", df_cols(df))
+    df_print(df)
+
+    print("")
+    print("mean age   :", df_mean(df, "age"))
+    print("max income :", df_max(df, "income"))
+    print("std income :", df_std(df, "income"))
+
+    print("")
+    print("== adults (age >= 30), by income desc ==")
+    adults = df_sort(df_filter_ge(df, "age", 30.0), "income", 0)
+    df_print(adults)
+
+    print("")
+    print("== mean income by city ==")
+    df_print(df_groupby_mean(df, "city", "income"))
+
+    print("")
+    print(df_describe(df))
+    return 0
+}

@@ -1,0 +1,71 @@
+# ── dataframe: Pandas-like data analysis for Ezy ──────────────────
+# A DataFrame is an opaque integer handle (0 = invalid). Columns keep the
+# original cell text plus a parsed numeric view; numeric aggregations skip
+# empty/non-numeric cells. Transforms (head/tail/select/filter/sort/groupby)
+# return a NEW handle and never mutate the source.
+#
+#   import "dataframe"
+#   df = df_read_csv("data.csv")
+#   df_print(df)
+#   print(df_mean(df, "age"))
+#   adults = df_filter_ge(df, "age", 18.0)
+#   by_city = df_groupby_mean(df, "city", "income")
+#   df_print(by_city)
+
+# ── I/O ───────────────────────────────────────────────
+extern fn df_read_csv(path: string) -> int          # CSV file -> handle (0 on error)
+extern fn df_save_csv(h: int, path: string) -> int  # write CSV (1 ok)
+extern fn df_free(h: int) -> int                     # release a handle
+
+# ── Shape / metadata ──────────────────────────────────
+extern fn df_rows(h: int) -> int
+extern fn df_cols(h: int) -> int
+extern fn df_col_name(h: int, i: int) -> string      # i-th column name
+extern fn df_has_col(h: int, name: string) -> int
+extern fn df_col_index(h: int, name: string) -> int  # -1 if absent
+extern fn df_is_numeric(h: int, col: string) -> int  # 1 if the column is numeric
+
+# ── Cell access (column by name) ──────────────────────
+extern fn df_get_float(h: int, row: int, col: string) -> float
+extern fn df_get_int(h: int, row: int, col: string) -> int
+extern fn df_get_str(h: int, row: int, col: string) -> string
+
+# ── Aggregations (numeric column, empties skipped) ────
+extern fn df_count(h: int, col: string) -> int       # non-empty cells
+extern fn df_sum(h: int, col: string) -> float
+extern fn df_mean(h: int, col: string) -> float
+extern fn df_min(h: int, col: string) -> float
+extern fn df_max(h: int, col: string) -> float
+extern fn df_std(h: int, col: string) -> float       # sample std (n-1)
+extern fn df_var(h: int, col: string) -> float
+extern fn df_median(h: int, col: string) -> float
+extern fn df_nunique(h: int, col: string) -> int     # distinct values
+
+# ── Row / column selection (return NEW handle) ────────
+extern fn df_head(h: int, n: int) -> int
+extern fn df_tail(h: int, n: int) -> int
+extern fn df_select(h: int, cols_csv: string) -> int # "a,b,c" subset of columns
+
+# ── Filtering (numeric, return NEW handle) ────────────
+extern fn df_filter_gt(h: int, col: string, v: float) -> int
+extern fn df_filter_ge(h: int, col: string, v: float) -> int
+extern fn df_filter_lt(h: int, col: string, v: float) -> int
+extern fn df_filter_le(h: int, col: string, v: float) -> int
+extern fn df_filter_eq(h: int, col: string, v: float) -> int
+extern fn df_filter_ne(h: int, col: string, v: float) -> int
+extern fn df_filter_str(h: int, col: string, val: string) -> int   # exact text match
+
+# ── Sorting (return NEW handle) ───────────────────────
+extern fn df_sort(h: int, col: string, ascending: int) -> int      # ascending: 1/0
+
+# ── Group-by (group_col -> aggregate, return NEW handle) ──
+extern fn df_groupby_mean(h: int, group_col: string, value_col: string) -> int
+extern fn df_groupby_sum(h: int, group_col: string, value_col: string) -> int
+extern fn df_groupby_min(h: int, group_col: string, value_col: string) -> int
+extern fn df_groupby_max(h: int, group_col: string, value_col: string) -> int
+extern fn df_groupby_count(h: int, group_col: string) -> int
+
+# ── Rendering ─────────────────────────────────────────
+extern fn df_print(h: int) -> int                    # pretty table to stdout (head 20)
+extern fn df_to_string(h: int) -> string             # full table as text
+extern fn df_describe(h: int) -> string              # count/mean/std/min/max per numeric col
