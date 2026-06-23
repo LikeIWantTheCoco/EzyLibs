@@ -623,6 +623,45 @@ function emit(ast, opts) {
     const obj = Object.assign({}, ...names.map((n) => styles[n] || {}));
     return { obj, cls: classForMerged(names.join('+'), obj) };
   }
+  // reactive style: style={cond ? styles.a : styles.b} or [base, cond && styles.x]
+  function planDynStyle(node, scope) {
+    if (!node || node.type !== 'JSXExpressionContainer') return null;
+    const e = node.expression;
+    const conds = []; const cells = new Set();
+    const styleCls = (n) => (n && n.type === 'MemberExpression' && n.object.name === 'styles') ? classForMerged(n.property.name, styles[n.property.name] || {}) : null;
+    const tern = (t) => { const a = styleCls(t.consequent), b = styleCls(t.alternate); const cc = cexpr(t.test, scope).c; cellsIn(t.test).forEach((c) => cells.add(c)); if (a) conds.push({ cls: a, cond: cc }); if (b) conds.push({ cls: b, cond: `!(${cc})` }); };
+    if (e.type === 'ConditionalExpression') tern(e);
+    else if (e.type === 'ArrayExpression') for (const el of e.elements) {
+      if (!el) continue;
+      if (el.type === 'LogicalExpression' && el.operator === '&&') { const cl = styleCls(el.right); if (cl) { conds.push({ cls: cl, cond: cexpr(el.left, scope).c }); cellsIn(el.left).forEach((c) => cells.add(c)); } }
+      else if (el.type === 'ConditionalExpression') tern(el);
+    }
+    return conds.length ? { conds, cells: [...cells] } : null;
+  }
+  // optional widget events (work on windowed widgets: Button/Input; harmless else)
+  function wireEvents(v, a, scope) {
+    const handler = (attr, cbSig, body) => {
+      if (!a[attr]) return null;
+      const fn = a[attr].expression; const lines = [];
+      if (fn.type === 'Identifier' && methodByName(fn.name)) lines.push(`  method_${fn.name}(s${methodByName(fn.name).node.params.length ? ', 0' : ''});`);
+      else if (fn.type === 'ArrowFunctionExpression') genStmts(fn.body, { ...scope }, lines);
+      const id = `cb_${hN++}`;
+      out.fns.push(`static gboolean ${id}(${cbSig}) {\n  SwissState* s = (SwissState*)ud; (void)w; (void)e;\n${body ? body(lines) : lines.join('\n')}\n  return FALSE;\n}`);
+      return id;
+    };
+    const masks = [];
+    const conn = (attr, signal, mask) => { const id = handler(attr, 'GtkWidget* w, GdkEvent* e, gpointer ud'); if (id) { masks.push(mask); out.build.push(`  g_signal_connect(GTK_WIDGET(${v}), "${signal}", G_CALLBACK(${id}), s);`); } };
+    conn('onFocus', 'focus-in-event', 'GDK_FOCUS_CHANGE_MASK');
+    conn('onBlur', 'focus-out-event', 'GDK_FOCUS_CHANGE_MASK');
+    conn('onMouseEnter', 'enter-notify-event', 'GDK_ENTER_NOTIFY_MASK');
+    conn('onMouseLeave', 'leave-notify-event', 'GDK_LEAVE_NOTIFY_MASK');
+    conn('onKeyDown', 'key-press-event', 'GDK_KEY_PRESS_MASK');
+    if (a.onDoubleClick) {
+      const id = handler('onDoubleClick', 'GtkWidget* w, GdkEventButton* e, gpointer ud', (lines) => `  if (e->type == GDK_2BUTTON_PRESS) {\n${lines.join('\n')}\n  }`);
+      if (id) { masks.push('GDK_BUTTON_PRESS_MASK'); out.build.push(`  g_signal_connect(GTK_WIDGET(${v}), "button-press-event", G_CALLBACK(${id}), s);`); }
+    }
+    if (masks.length) out.build.push(`  gtk_widget_add_events(GTK_WIDGET(${v}), ${[...new Set(masks)].join(' | ')});`);
+  }
   function attrs(el) { const o = {}; for (const a of el.openingElement.attributes) if (a.type === 'JSXAttribute') o[a.name.name] = a.value; return o; }
   const elName = (el) => el.openingElement.name.name;
   const strAttr = (a) => !a ? '' : a.type === 'StringLiteral' ? a.value : a.type === 'JSXExpressionContainer' && a.expression.type === 'StringLiteral' ? a.expression.value : '';
@@ -679,7 +718,19 @@ function emit(ast, opts) {
     if (HSIZE[tag]) { st = Object.assign({ fontSize: HSIZE[tag], fontWeight: 'bold' }, st || {}); cls = classForMerged('h_' + tag + '_' + (cls || 'x'), st); }
     const expand = st && (st.flex || st.flexGrow) ? 'TRUE' : 'FALSE';
     const pack = (v, force) => { if (parent) out.build.push(`  gtk_box_pack_start(GTK_BOX(${parent}), ${v}, ${force || expand}, ${force || expand}, 0);`); };
-    const addClass = (v) => { if (cls) out.build.push(`  gtk_style_context_add_class(gtk_widget_get_style_context(${v}), "${cls}");`); };
+    const dyn = planDynStyle(a.style, scope);   // reactive style: cond ? a : b / [base, cond && x]
+    const addClass = (v) => {
+      if (cls) out.build.push(`  gtk_style_context_add_class(gtk_widget_get_style_context(${v}), "${cls}");`);
+      if (dyn) {
+        const w = String(v).startsWith('s->') || scope.__inrow ? v : stash(v);
+        for (const cnd of dyn.conds) {
+          const snip = `{ GtkStyleContext* _sc = gtk_widget_get_style_context(GTK_WIDGET(${w})); if (${cnd.cond}) gtk_style_context_add_class(_sc, "${cnd.cls}"); else gtk_style_context_remove_class(_sc, "${cnd.cls}"); }`;
+          out.build.push('  ' + snip);
+          if (!scope.__inrow) dyn.cells.forEach((cn) => deps[cn] && deps[cn].push(snip));   // rows rebuild; others react
+        }
+      }
+      wireEvents(v, a, scope);
+    };
 
     if (name === 'View' || name === 'Tab') {
       const v = vid('v');
@@ -735,8 +786,18 @@ function emit(ast, opts) {
     }
     if (name === 'Button') {
       const b = vid('b');
-      const label = a.title ? strAttr(a.title) : el.children.filter((c) => c.type === 'JSXText').map((c) => c.value.trim()).filter(Boolean).join(' ');
+      let label = '', dynTitle = null;
+      if (a.title && a.title.type === 'StringLiteral') label = a.title.value;
+      else if (a.title && a.title.type === 'JSXExpressionContainer') { if (a.title.expression.type === 'StringLiteral') label = a.title.expression.value; else dynTitle = a.title.expression; }
+      else if (!a.title) label = el.children.filter((c) => c.type === 'JSXText').map((c) => c.value.trim()).filter(Boolean).join(' ');
       out.build.push(`  GtkWidget* ${b} = gtk_button_new_with_label(${cstr(label)});`);
+      if (dynTitle) {  // reactive button label
+        const tv = cexpr(dynTitle, scope);
+        const tw = scope.__inrow ? b : stash(b);
+        const snip = `gtk_button_set_label(GTK_BUTTON(${tw}), ${tv.t === 'string' ? tv.c : `g_strdup_printf("%lld", (long long)(${tv.c}))`});`;
+        out.build.push('  ' + snip);
+        if (!scope.__inrow) cellsIn(dynTitle).forEach((cn) => deps[cn] && deps[cn].push(snip));
+      }
       addClass(b);
       let press = a.onPress || a.onClick;   // onClick alias (web parity)
       if (!press && strAttr(a.type) === 'submit' && scope.__form) press = scope.__form; // form submit button
