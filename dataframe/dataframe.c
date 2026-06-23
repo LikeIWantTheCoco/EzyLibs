@@ -1651,3 +1651,205 @@ long long df_melt(long long h, const char *id_csv, const char *value_csv,
     df_finalize_types(o);
     return df_register(o);
 }
+
+/* ── v1.5: multi-key group-by + native datetime ───────────────────── */
+
+/* group by several key columns at once. group_cols_csv = "a,b"; output =
+   the key columns followed by the aggregate of value_col.
+   agg ∈ mean|sum|count|min|max|median|std. For "count" value_col may be "". */
+long long df_groupby_multi(long long h, const char *group_cols_csv,
+                           const char *value_col, const char *agg) {
+    DataFrame *d = DF(h);
+    if (!d) return 0;
+    char *spec = dup_str(group_cols_csv);
+    long long gc[32], ng = 0;
+    char *tok = strtok(spec, ",");
+    while (tok && ng < 32) { while (*tok==' ') tok++; long long c = col_index(d, tok); if (c>=0) gc[ng++]=c; tok = strtok(NULL, ","); }
+    if (ng == 0) { free(spec); return 0; }
+    int is_count = !strcmp(agg, "count");
+    long long vc = is_count ? -1 : col_index(d, value_col);
+    if (!is_count && vc < 0) { free(spec); return 0; }
+
+    /* composite key per row; track first-occurrence row of each combo */
+    char **combo = malloc((size_t)(d->nrows>0?d->nrows:1) * sizeof(char *));
+    long long *first = malloc((size_t)(d->nrows>0?d->nrows:1) * sizeof(long long));
+    long long nk = 0;
+    char key[2048];
+    for (long long r = 0; r < d->nrows; r++) {
+        size_t o = 0; key[0] = '\0';
+        for (long long g = 0; g < ng; g++)
+            o += (size_t)snprintf(key + o, sizeof key - o, "%s\x01", d->cols[gc[g]].strs[r]);
+        int seen = -1;
+        for (long long j = 0; j < nk; j++) if (!strcmp(combo[j], key)) { seen = (int)j; break; }
+        if (seen < 0) { combo[nk] = dup_str(key); first[nk] = r; nk++; }
+    }
+
+    DataFrame *out = df_alloc(ng + 1, nk);
+    for (long long g = 0; g < ng; g++) out->names[g] = dup_str(d->names[gc[g]]);
+    out->names[ng] = dup_str(is_count ? "count" : agg);
+
+    double *bucket = malloc((size_t)(d->nrows>0?d->nrows:1) * sizeof(double));
+    char buf[64];
+    for (long long k = 0; k < nk; k++) {
+        long long fr = first[k];
+        for (long long g = 0; g < ng; g++) out->cols[g].strs[k] = dup_str(d->cols[gc[g]].strs[fr]);
+        long long m = 0;
+        for (long long r = 0; r < d->nrows; r++) {
+            int same = 1;
+            for (long long g = 0; g < ng; g++)
+                if (strcmp(d->cols[gc[g]].strs[r], d->cols[gc[g]].strs[fr])) { same = 0; break; }
+            if (!same) continue;
+            if (is_count) { bucket[m++] = 0; continue; }
+            double v = d->cols[vc].nums[r];
+            if (!isnan(v)) bucket[m++] = v;
+        }
+        double res;
+        if (is_count) res = (double)m;
+        else if (!strcmp(agg, "std")) {
+            if (m < 2) res = NAN;
+            else { double mu = agg_list(bucket, m, "mean"), s = 0; for (long long i=0;i<m;i++){double e=bucket[i]-mu;s+=e*e;} res = sqrt(s/(double)(m-1)); }
+        } else if (!strcmp(agg, "median")) {
+            if (m == 0) res = NAN;
+            else { qsort(bucket,(size_t)m,sizeof(double),cmp_double); res = (m%2)?bucket[m/2]:(bucket[m/2-1]+bucket[m/2])/2.0; }
+        } else res = agg_list(bucket, m, agg);
+        fmt_num(res, buf, sizeof buf);
+        out->cols[ng].strs[k] = dup_str(buf);
+    }
+    for (long long k = 0; k < nk; k++) free(combo[k]);
+    free(combo); free(first); free(bucket); free(spec);
+    df_finalize_types(out);
+    return df_register(out);
+}
+
+/* ── datetime ──────────────────────────────────────────────────────
+ * Dates live in string columns as "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS"
+ * (also accepts YYYY/MM/DD). Component extractors add a numeric column;
+ * add_days / format add a string column.
+ */
+
+static int dt_parse(const char *s, struct tm *out) {
+    if (!s || !*s) return 0;
+    memset(out, 0, sizeof *out);
+    int y, mo, d, h = 0, mi = 0, se = 0;
+    int n = sscanf(s, "%d-%d-%d %d:%d:%d", &y, &mo, &d, &h, &mi, &se);
+    if (n < 3) { n = sscanf(s, "%d/%d/%d", &y, &mo, &d); if (n < 3) return 0; }
+    out->tm_year = y - 1900; out->tm_mon = mo - 1; out->tm_mday = d;
+    out->tm_hour = h; out->tm_min = mi; out->tm_sec = se;
+    return 1;
+}
+
+/* which: 0 year 1 month 2 day 3 weekday(Mon=0) 4 hour 5 minute 6 second
+   7 dayofyear 8 quarter */
+static long long df_dt_part(DataFrame *d, const char *newcol, const char *col, int which) {
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    double *v = malloc((size_t)(d->nrows>0?d->nrows:1) * sizeof(double));
+    struct tm tm;
+    for (long long r = 0; r < d->nrows; r++) {
+        if (!dt_parse(d->cols[c].strs[r], &tm)) { v[r] = NAN; continue; }
+        time_t t = timegm(&tm); struct tm g; gmtime_r(&t, &g);
+        switch (which) {
+            case 0: v[r] = g.tm_year + 1900; break;
+            case 1: v[r] = g.tm_mon + 1; break;
+            case 2: v[r] = g.tm_mday; break;
+            case 3: v[r] = (g.tm_wday + 6) % 7; break;   /* Monday = 0 */
+            case 4: v[r] = g.tm_hour; break;
+            case 5: v[r] = g.tm_min; break;
+            case 6: v[r] = g.tm_sec; break;
+            case 7: v[r] = g.tm_yday + 1; break;
+            case 8: v[r] = g.tm_mon / 3 + 1; break;
+            default: v[r] = NAN;
+        }
+    }
+    return df_emit_with(d, newcol, v);
+}
+
+long long df_dt_year(long long h, const char *nc, const char *c)    { return df_dt_part(DF(h), nc, c, 0); }
+long long df_dt_month(long long h, const char *nc, const char *c)   { return df_dt_part(DF(h), nc, c, 1); }
+long long df_dt_day(long long h, const char *nc, const char *c)     { return df_dt_part(DF(h), nc, c, 2); }
+long long df_dt_weekday(long long h, const char *nc, const char *c) { return df_dt_part(DF(h), nc, c, 3); }
+long long df_dt_hour(long long h, const char *nc, const char *c)    { return df_dt_part(DF(h), nc, c, 4); }
+long long df_dt_minute(long long h, const char *nc, const char *c)  { return df_dt_part(DF(h), nc, c, 5); }
+long long df_dt_second(long long h, const char *nc, const char *c)  { return df_dt_part(DF(h), nc, c, 6); }
+long long df_dt_dayofyear(long long h, const char *nc, const char *c){ return df_dt_part(DF(h), nc, c, 7); }
+long long df_dt_quarter(long long h, const char *nc, const char *c) { return df_dt_part(DF(h), nc, c, 8); }
+
+/* whole days from col_b to col_a (a - b) */
+long long df_dt_diff_days(long long h, const char *newcol, const char *col_a, const char *col_b) {
+    DataFrame *d = DF(h);
+    long long ca = col_index(d, col_a), cb = col_index(d, col_b);
+    if (ca < 0 || cb < 0) return 0;
+    double *v = malloc((size_t)(d->nrows>0?d->nrows:1) * sizeof(double));
+    struct tm ta, tb;
+    for (long long r = 0; r < d->nrows; r++) {
+        if (!dt_parse(d->cols[ca].strs[r], &ta) || !dt_parse(d->cols[cb].strs[r], &tb)) { v[r] = NAN; continue; }
+        double secs = difftime(timegm(&ta), timegm(&tb));
+        v[r] = secs / 86400.0;
+    }
+    return df_emit_with(d, newcol, v);
+}
+
+/* col + n days -> new "YYYY-MM-DD" string column */
+long long df_dt_add_days(long long h, const char *newcol, const char *col, long long days) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    char **vals = malloc((size_t)(d->nrows>0?d->nrows:1) * sizeof(char *));
+    struct tm tm; char buf[32];
+    for (long long r = 0; r < d->nrows; r++) {
+        if (!dt_parse(d->cols[c].strs[r], &tm)) { vals[r] = dup_str(""); continue; }
+        time_t t = timegm(&tm) + days * 86400; struct tm g; gmtime_r(&t, &g);
+        strftime(buf, sizeof buf, "%Y-%m-%d", &g);
+        vals[r] = dup_str(buf);
+    }
+    DataFrame *r = df_clone_all(d);
+    df_push_str_col(r, newcol, vals);
+    return df_register(r);
+}
+
+/* reformat a date column with strftime -> new string column */
+long long df_dt_format(long long h, const char *newcol, const char *col, const char *fmt) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    char **vals = malloc((size_t)(d->nrows>0?d->nrows:1) * sizeof(char *));
+    struct tm tm; char buf[128];
+    for (long long r = 0; r < d->nrows; r++) {
+        if (!dt_parse(d->cols[c].strs[r], &tm)) { vals[r] = dup_str(""); continue; }
+        time_t t = timegm(&tm); struct tm g; gmtime_r(&t, &g);
+        strftime(buf, sizeof buf, fmt, &g);
+        vals[r] = dup_str(buf);
+    }
+    DataFrame *r = df_clone_all(d);
+    df_push_str_col(r, newcol, vals);
+    return df_register(r);
+}
+
+/* keep rows whose date column is within [start, end] (inclusive) */
+long long df_dt_filter_range(long long h, const char *col, const char *start, const char *end) {
+    DataFrame *d = DF(h);
+    long long c = col_index(d, col);
+    if (c < 0) return 0;
+    struct tm ts, te;
+    int has_s = dt_parse(start, &ts), has_e = dt_parse(end, &te);
+    time_t lo = has_s ? timegm(&ts) : 0, hi = has_e ? timegm(&te) : 0;
+    char *mask = malloc((size_t)(d->nrows>0?d->nrows:1));
+    struct tm tm;
+    for (long long r = 0; r < d->nrows; r++) {
+        mask[r] = 0;
+        if (!dt_parse(d->cols[c].strs[r], &tm)) continue;
+        time_t t = timegm(&tm);
+        if (has_s && t < lo) continue;
+        if (has_e && t > hi) continue;
+        mask[r] = 1;
+    }
+    long long res = df_filter_mask(d, mask); free(mask);
+    return res;
+}
+
+/* current UTC time as "YYYY-MM-DD HH:MM:SS" */
+char *df_dt_now(void) {
+    time_t t = time(NULL); struct tm g; gmtime_r(&t, &g);
+    char buf[32]; strftime(buf, sizeof buf, "%Y-%m-%d %H:%M:%S", &g);
+    return dup_str(buf);
+}

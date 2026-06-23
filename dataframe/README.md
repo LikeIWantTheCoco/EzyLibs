@@ -112,6 +112,20 @@ fn main():
 ### Multi-aggregate group-by (new handle)
 - `df_groupby_agg(h, group_col, value_col, aggs)` — `aggs` is a comma list
   of `mean`, `sum`, `count`, `min`, `max`, `std`, `median`; one column each
+- `df_groupby_multi(h, group_cols, value_col, agg)` — group by several key
+  columns (`"region,product"`); one aggregate column (`value_col` may be `""`
+  for `count`)
+
+### Datetime
+Dates are strings in `YYYY-MM-DD` or `YYYY-MM-DD HH:MM:SS` (also `YYYY/MM/DD`).
+Extractors add a numeric column; arithmetic/format add a string column.
+- `df_dt_year/month/day/weekday/hour/minute/second/dayofyear/quarter(h, newcol, col)`
+  — `weekday` is Monday=0
+- `df_dt_diff_days(h, newcol, col_a, col_b)` — `a - b` in whole days
+- `df_dt_add_days(h, newcol, col, days)` — shift dates → new `YYYY-MM-DD`
+- `df_dt_format(h, newcol, col, fmt)` — `strftime` formatting
+- `df_dt_filter_range(h, col, start, end)` — keep rows with date in `[start, end]`
+- `df_dt_now() -> string` — current UTC timestamp
 
 ### Statistics
 - `df_corr(h, a, b)` — Pearson correlation between two numeric columns

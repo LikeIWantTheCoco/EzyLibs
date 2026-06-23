@@ -98,6 +98,26 @@ extern fn df_merge_outer(left: int, right: int, on: string) -> int  # full outer
 # ── Multi-aggregate group-by (NEW handle) ─────────────
 # aggs is a comma list of: mean, sum, count, min, max, std, median
 extern fn df_groupby_agg(h: int, group_col: string, value_col: string, aggs: string) -> int
+# group by several key columns at once ("a,b"); agg is a single aggregate
+extern fn df_groupby_multi(h: int, group_cols: string, value_col: string, agg: string) -> int
+
+# ── Datetime (dates as "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS") ──
+# component extractors add a numeric column (NEW handle)
+extern fn df_dt_year(h: int, newcol: string, col: string) -> int
+extern fn df_dt_month(h: int, newcol: string, col: string) -> int
+extern fn df_dt_day(h: int, newcol: string, col: string) -> int
+extern fn df_dt_weekday(h: int, newcol: string, col: string) -> int   # Monday = 0
+extern fn df_dt_hour(h: int, newcol: string, col: string) -> int
+extern fn df_dt_minute(h: int, newcol: string, col: string) -> int
+extern fn df_dt_second(h: int, newcol: string, col: string) -> int
+extern fn df_dt_dayofyear(h: int, newcol: string, col: string) -> int
+extern fn df_dt_quarter(h: int, newcol: string, col: string) -> int
+# arithmetic / formatting (add a column) and filtering
+extern fn df_dt_diff_days(h: int, newcol: string, col_a: string, col_b: string) -> int  # a - b in days
+extern fn df_dt_add_days(h: int, newcol: string, col: string, days: int) -> int          # -> new date string
+extern fn df_dt_format(h: int, newcol: string, col: string, fmt: string) -> int          # strftime
+extern fn df_dt_filter_range(h: int, col: string, start: string, end: string) -> int     # [start, end]
+extern fn df_dt_now() -> string                                                          # UTC now
 
 # ── Statistics ────────────────────────────────────────
 extern fn df_corr(h: int, a: string, b: string) -> float       # Pearson correlation
