@@ -1,6 +1,6 @@
 {
   "name":         "dataframe",
-  "version":      "1.5.0",
+  "version":      "1.6.0",
   "type":         "c",
   "description":  "Pandas-like data analysis for Ezy: CSV DataFrames with aggregations, filtering, sorting and group-by via opaque handles",
   "sources":      ["dataframe.c"],

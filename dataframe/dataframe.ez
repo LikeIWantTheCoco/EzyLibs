@@ -73,6 +73,7 @@ extern fn df_set_seed(s: int) -> int                   # reproducible df_sample
 
 # ── Sorting (return NEW handle) ───────────────────────
 extern fn df_sort(h: int, col: string, ascending: int) -> int      # ascending: 1/0
+extern fn df_sort_multi(h: int, cols: string, asc: string) -> int  # "a,b" by "1,0"
 
 # ── Group-by (group_col -> aggregate, return NEW handle) ──
 extern fn df_groupby_mean(h: int, group_col: string, value_col: string) -> int
@@ -101,7 +102,14 @@ extern fn df_groupby_agg(h: int, group_col: string, value_col: string, aggs: str
 # group by several key columns at once ("a,b"); agg is a single aggregate
 extern fn df_groupby_multi(h: int, group_cols: string, value_col: string, agg: string) -> int
 
+# ── Expression eval / crosstab (NEW handle) ───────────
+# arithmetic over columns: + - * / %, parens, numeric literals, unary -
+extern fn df_eval(h: int, newcol: string, expr: string) -> int     # e.g. "units * price"
+extern fn df_crosstab(h: int, row_col: string, col_col: string) -> int  # co-occurrence counts
+
 # ── Datetime (dates as "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS") ──
+# resample a date column into periods and aggregate: freq D|W|M|Q|Y
+extern fn df_resample(h: int, date_col: string, freq: string, value_col: string, agg: string) -> int
 # component extractors add a numeric column (NEW handle)
 extern fn df_dt_year(h: int, newcol: string, col: string) -> int
 extern fn df_dt_month(h: int, newcol: string, col: string) -> int

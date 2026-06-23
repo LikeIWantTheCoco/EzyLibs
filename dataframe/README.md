@@ -77,6 +77,18 @@ fn main():
 - `df_filter_gt/ge/lt/le/eq/ne(h, col, value)` — numeric predicates
 - `df_filter_str(h, col, text)` — exact text match
 - `df_sort(h, col, ascending)` — `ascending`: `1` asc, `0` desc
+- `df_sort_multi(h, cols, asc)` — multi-key sort, e.g. cols `"region,units"`,
+  asc `"1,0"` (region ascending, units descending)
+- `df_crosstab(h, row_col, col_col)` — co-occurrence count cross-tabulation
+- `df_resample(h, date_col, freq, value_col, agg)` — bucket dates into periods
+  (`freq` ∈ `D`/`W`/`M`/`Q`/`Y`) and aggregate; sorted chronologically
+
+### Expression eval (the `df.eval` / `assign` substitute)
+- `df_eval(h, newcol, expr)` — add a column from an arithmetic expression over
+  existing columns: `+ - * / %`, parentheses, numeric literals, unary minus.
+  Example: `df_eval(h, "net", "units * price * (1 - 0.1) + 5")`.
+  (A general `apply(lambda)` is not possible yet — the language has no closures —
+  but `df_eval` covers numeric row-wise transforms.)
 
 ### Query / predicates / top-N (return a new handle)
 - `df_query(h, expr)` — predicate string, e.g. `"age > 30 and dept == Eng"`

@@ -1853,3 +1853,203 @@ char *df_dt_now(void) {
     char buf[32]; strftime(buf, sizeof buf, "%Y-%m-%d %H:%M:%S", &g);
     return dup_str(buf);
 }
+
+/* ── v1.6: expression eval, resample, crosstab, multi-sort ────────── */
+
+/* per-row arithmetic expression evaluator over column names.
+   grammar: expr = term (('+'|'-') term)*; term = factor (('*'|'/'|'%') factor)*;
+   factor = number | ident | '(' expr ')' | ('-'|'+') factor */
+static void ev_ws(const char **p) { while (**p == ' ' || **p == '\t') (*p)++; }
+static double ev_expr(DataFrame *d, long long row, const char **p);
+
+static double ev_factor(DataFrame *d, long long row, const char **p) {
+    ev_ws(p);
+    if (**p == '(') { (*p)++; double v = ev_expr(d, row, p); ev_ws(p); if (**p == ')') (*p)++; return v; }
+    if (**p == '-') { (*p)++; return -ev_factor(d, row, p); }
+    if (**p == '+') { (*p)++; return  ev_factor(d, row, p); }
+    if (isdigit((unsigned char)**p) || **p == '.') { char *e; double v = strtod(*p, &e); *p = e; return v; }
+    char name[128]; int i = 0;
+    while ((isalnum((unsigned char)**p) || **p == '_') && i < 127) name[i++] = *(*p)++;
+    name[i] = '\0';
+    long long c = col_index(d, name);
+    if (c < 0) return NAN;
+    return d->cols[c].nums[row];
+}
+static double ev_term(DataFrame *d, long long row, const char **p) {
+    double v = ev_factor(d, row, p);
+    for (;;) {
+        ev_ws(p);
+        char op = **p;
+        if (op != '*' && op != '/' && op != '%') break;
+        (*p)++;
+        double r = ev_factor(d, row, p);
+        if (op == '*') v *= r;
+        else if (op == '/') v = (r == 0) ? NAN : v / r;
+        else v = (r == 0) ? NAN : fmod(v, r);
+    }
+    return v;
+}
+static double ev_expr(DataFrame *d, long long row, const char **p) {
+    double v = ev_term(d, row, p);
+    for (;;) {
+        ev_ws(p);
+        char op = **p;
+        if (op != '+' && op != '-') break;
+        (*p)++;
+        double r = ev_term(d, row, p);
+        v = (op == '+') ? v + r : v - r;
+    }
+    return v;
+}
+
+/* new column from an arithmetic expression over existing columns,
+   e.g. df_eval(h, "total", "units * price * (1 - discount)") */
+long long df_eval(long long h, const char *newcol, const char *expr) {
+    DataFrame *d = DF(h);
+    if (!d) return 0;
+    double *v = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(double));
+    for (long long r = 0; r < d->nrows; r++) {
+        const char *p = expr;
+        v[r] = ev_expr(d, r, &p);
+    }
+    return df_emit_with(d, newcol, v);
+}
+
+/* period key for a date by frequency: Y, Q, M, W, D */
+static int dt_period(const char *s, char freq, char *out, size_t cap) {
+    struct tm tm;
+    if (!dt_parse(s, &tm)) { out[0] = '\0'; return 0; }
+    time_t t = timegm(&tm); struct tm g; gmtime_r(&t, &g);
+    switch (freq) {
+        case 'Y': snprintf(out, cap, "%04d", g.tm_year + 1900); break;
+        case 'Q': snprintf(out, cap, "%04d-Q%d", g.tm_year + 1900, g.tm_mon / 3 + 1); break;
+        case 'M': snprintf(out, cap, "%04d-%02d", g.tm_year + 1900, g.tm_mon + 1); break;
+        case 'W': strftime(out, cap, "%G-W%V", &g); break;
+        case 'D': default: strftime(out, cap, "%Y-%m-%d", &g); break;
+    }
+    return 1;
+}
+
+/* resample a date column into periods and aggregate value_col.
+   freq: "D" "W" "M" "Q" "Y"; agg: mean|sum|count|min|max. Sorted by period. */
+long long df_resample(long long h, const char *date_col, const char *freq,
+                      const char *value_col, const char *agg) {
+    DataFrame *d = DF(h);
+    long long dc = col_index(d, date_col);
+    if (dc < 0) return 0;
+    int is_count = !strcmp(agg, "count");
+    long long vc = is_count ? -1 : col_index(d, value_col);
+    if (!is_count && vc < 0) return 0;
+    char f = freq && freq[0] ? freq[0] : 'D';
+
+    char **keys = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(char *));
+    long long nk = 0;
+    char pk[64];
+    for (long long r = 0; r < d->nrows; r++) {
+        if (!dt_period(d->cols[dc].strs[r], f, pk, sizeof pk)) continue;
+        int seen = 0; for (long long j = 0; j < nk; j++) if (!strcmp(keys[j], pk)) { seen = 1; break; }
+        if (!seen) keys[nk++] = dup_str(pk);
+    }
+
+    DataFrame *out = df_alloc(2, nk);
+    out->names[0] = dup_str(date_col);
+    out->names[1] = dup_str(is_count ? "count" : agg);
+    double *bucket = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(double));
+    char buf[64];
+    for (long long k = 0; k < nk; k++) {
+        long long m = 0;
+        for (long long r = 0; r < d->nrows; r++) {
+            if (!dt_period(d->cols[dc].strs[r], f, pk, sizeof pk) || strcmp(pk, keys[k])) continue;
+            if (is_count) { bucket[m++] = 0; continue; }
+            double v = d->cols[vc].nums[r];
+            if (!isnan(v)) bucket[m++] = v;
+        }
+        out->cols[0].strs[k] = dup_str(keys[k]);
+        double res = is_count ? (double)m : agg_list(bucket, m, agg);
+        fmt_num(res, buf, sizeof buf);
+        out->cols[1].strs[k] = dup_str(buf);
+    }
+    for (long long k = 0; k < nk; k++) free(keys[k]);
+    free(keys); free(bucket);
+    df_finalize_types(out);
+    long long handle = df_register(out);
+    return df_sort(handle, date_col, 1);     /* chronological */
+}
+
+/* frequency cross-tabulation: rows = distinct row_col, columns = distinct
+   col_col, cells = number of co-occurrences */
+long long df_crosstab(long long h, const char *row_col, const char *col_col) {
+    DataFrame *d = DF(h);
+    long long rc = col_index(d, row_col), cc = col_index(d, col_col);
+    if (rc < 0 || cc < 0) return 0;
+    char **rk = malloc((size_t)(d->nrows>0?d->nrows:1)*sizeof(char*));
+    char **ck = malloc((size_t)(d->nrows>0?d->nrows:1)*sizeof(char*));
+    long long nr = 0, nc = 0;
+    for (long long r = 0; r < d->nrows; r++) {
+        const char *rv = d->cols[rc].strs[r], *cv = d->cols[cc].strs[r];
+        int f = 0; for (long long j=0;j<nr;j++) if (!strcmp(rk[j],rv)){f=1;break;} if(!f) rk[nr++]=(char*)rv;
+        f = 0; for (long long j=0;j<nc;j++) if (!strcmp(ck[j],cv)){f=1;break;} if(!f) ck[nc++]=(char*)cv;
+    }
+    DataFrame *o = df_alloc(1 + nc, nr);
+    o->names[0] = dup_str(row_col);
+    for (long long j = 0; j < nc; j++) o->names[1+j] = dup_str(ck[j]);
+    char buf[32];
+    for (long long i = 0; i < nr; i++) {
+        o->cols[0].strs[i] = dup_str(rk[i]);
+        for (long long j = 0; j < nc; j++) {
+            long long cnt = 0;
+            for (long long r = 0; r < d->nrows; r++)
+                if (!strcmp(d->cols[rc].strs[r], rk[i]) && !strcmp(d->cols[cc].strs[r], ck[j])) cnt++;
+            snprintf(buf, sizeof buf, "%lld", cnt);
+            o->cols[1+j].strs[i] = dup_str(buf);
+        }
+    }
+    free(rk); free(ck);
+    df_finalize_types(o);
+    return df_register(o);
+}
+
+/* multi-column sort. cols_csv = "a,b"; asc_csv = "1,0" (default asc) */
+static DataFrame *g_ms_df;
+static long long  g_ms_cols[16];
+static int        g_ms_asc[16];
+static int        g_ms_num[16];
+static long long  g_ms_n;
+
+static int cmp_multi(const void *a, const void *b) {
+    long long ra = *(const long long *)a, rb = *(const long long *)b;
+    for (long long i = 0; i < g_ms_n; i++) {
+        long long c = g_ms_cols[i];
+        int r;
+        if (g_ms_num[i]) {
+            double x = g_ms_df->cols[c].nums[ra], y = g_ms_df->cols[c].nums[rb];
+            if (isnan(x) && isnan(y)) r = 0; else if (isnan(x)) r = 1; else if (isnan(y)) r = -1;
+            else r = (x > y) - (x < y);
+        } else r = strcmp(g_ms_df->cols[c].strs[ra], g_ms_df->cols[c].strs[rb]);
+        if (r) return g_ms_asc[i] ? r : -r;
+    }
+    return (ra > rb) - (ra < rb);   /* stable */
+}
+
+long long df_sort_multi(long long h, const char *cols_csv, const char *asc_csv) {
+    DataFrame *d = DF(h);
+    if (!d) return 0;
+    char *cs = dup_str(cols_csv), *as = dup_str(asc_csv ? asc_csv : "");
+    g_ms_n = 0;
+    char *tok = strtok(cs, ",");
+    while (tok && g_ms_n < 16) {
+        while (*tok == ' ') tok++;
+        long long c = col_index(d, tok);
+        if (c >= 0) { g_ms_cols[g_ms_n] = c; g_ms_num[g_ms_n] = d->cols[c].is_numeric; g_ms_asc[g_ms_n] = 1; g_ms_n++; }
+        tok = strtok(NULL, ",");
+    }
+    long long i = 0; tok = strtok(as, ",");
+    while (tok && i < g_ms_n) { while (*tok == ' ') tok++; g_ms_asc[i++] = atoi(tok) ? 1 : 0; tok = strtok(NULL, ","); }
+    g_ms_df = d;
+    long long *idx = malloc((size_t)(d->nrows > 0 ? d->nrows : 1) * sizeof(long long));
+    for (long long r = 0; r < d->nrows; r++) idx[r] = r;
+    qsort(idx, (size_t)d->nrows, sizeof(long long), cmp_multi);
+    DataFrame *r = df_copy_rows(d, idx, d->nrows);
+    free(idx); free(cs); free(as);
+    return df_register(r);
+}
