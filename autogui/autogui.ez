@@ -1,0 +1,81 @@
+# ── autogui: keyboard & mouse automation ──
+# Cross-platform desktop backend, chosen at compile time:
+#   Linux → X11/XTEST   Windows → Win32   macOS → CoreGraphics
+# Screenshots write BMP or PNG (self-contained encoders, no extra deps).
+# Coordinates are absolute screen pixels (top-left = 0,0).
+# Mouse buttons: 1 left, 2 middle, 3 right, 4 wheel-up, 5 wheel-down.
+# Key names use X keysym names ("Return", "Escape", "F5", "a", "space")
+# plus aliases: enter esc tab backspace del home end pgup pgdn
+#               up down left right ctrl alt shift super win.
+# Every fn returns 0 on success, -1 on error (e.g. no X display).
+
+# ── mouse ──
+extern fn agui_move(x: int, y: int) -> int             # absolute cursor move
+extern fn agui_move_rel(dx: int, dy: int) -> int       # relative cursor move
+extern fn agui_mouse_x() -> int                        # current cursor X (-1 err)
+extern fn agui_mouse_y() -> int                        # current cursor Y (-1 err)
+extern fn agui_mouse_down(button: int) -> int          # press a button
+extern fn agui_mouse_up(button: int) -> int            # release a button
+extern fn agui_click(button: int) -> int               # press + release
+extern fn agui_double_click(button: int) -> int        # two clicks
+extern fn agui_triple_click(button: int) -> int        # three clicks
+extern fn agui_scroll(n: int) -> int                   # +up / -down notches
+
+extern fn agui_click_at(x: int, y: int, button: int) -> int  # move + click
+extern fn agui_drag(x1: int, y1: int, x2: int, y2: int, button: int) -> int
+extern fn agui_smooth_move(x: int, y: int, steps: int, ms: int) -> int  # glide
+
+# ── keyboard ──
+extern fn agui_key_tap(name: string) -> int            # press + release one key
+extern fn agui_key_down(name: string) -> int           # hold a key
+extern fn agui_key_up(name: string) -> int             # release a key
+extern fn agui_hotkey(modifier: string, key: string) -> int  # e.g. ("ctrl","c")
+extern fn agui_key_combo(combo: string) -> int         # chord e.g. "ctrl+shift+t"
+extern fn agui_key_press(name: string, times: int) -> int  # tap a key N times
+extern fn agui_type(text: string) -> int               # type a string (US layout)
+extern fn agui_type_delay(text: string, ms: int) -> int  # type w/ per-char delay
+
+# ── screen / pixels ──
+extern fn agui_screen_width() -> int
+extern fn agui_screen_height() -> int
+extern fn agui_pixel(x: int, y: int) -> int            # packed 0xRRGGBB (-1 err)
+extern fn agui_pixel_r(x: int, y: int) -> int          # red   0-255 (-1 err)
+extern fn agui_pixel_g(x: int, y: int) -> int          # green 0-255 (-1 err)
+extern fn agui_pixel_b(x: int, y: int) -> int          # blue  0-255 (-1 err)
+extern fn agui_rgb(r: int, g: int, b: int) -> int      # pack r,g,b -> 0xRRGGBB
+extern fn agui_pixel_match(x: int, y: int, rgb: int, tol: int) -> int  # 1/0
+extern fn agui_wait_pixel(x: int, y: int, rgb: int, tol: int, timeout_ms: int) -> int  # 0 found / -1 timeout
+
+# ── screenshot (BMP + PNG, no external deps) ──
+extern fn agui_screenshot(x: int, y: int, w: int, h: int, path: string) -> int  # BMP region (w/h<=0 = to edge)
+extern fn agui_screenshot_full(path: string) -> int    # BMP whole screen
+extern fn agui_screenshot_png(x: int, y: int, w: int, h: int, path: string) -> int  # PNG region
+extern fn agui_screenshot_full_png(path: string) -> int  # PNG whole screen
+
+# ── human-like / antidetect ──
+# Curved cursor paths, eased speed, jitter and randomized timing so actions
+# don't look like teleports or perfectly straight lines. OFF by default.
+# Toggle: when on, plain agui_move/agui_click/agui_type act human-like too.
+# The explicit agui_human_* calls always act human, regardless of the toggle.
+extern fn agui_human(on: int) -> int                       # 1 = human mode on, 0 = off
+extern fn agui_human_move(x: int, y: int) -> int           # curved, auto-timed move
+extern fn agui_human_move_to(x: int, y: int, ms: int) -> int  # curved move over `ms`
+extern fn agui_human_click(button: int) -> int             # click w/ human hold + pauses
+extern fn agui_human_click_at(x: int, y: int, button: int) -> int  # human move + click
+extern fn agui_human_type(text: string) -> int             # type w/ natural rhythm
+extern fn agui_human_delay(min_ms: int, max_ms: int) -> int  # sleep random in range
+# tuning (apply to all human_* calls):
+extern fn agui_set_curve(amount: float) -> int             # arc strength (0 = straight)
+extern fn agui_set_jitter(px: float) -> int                # per-step wobble in pixels
+extern fn agui_set_speed(mult: float) -> int               # time multiplier (1 = normal)
+extern fn agui_set_overshoot(on: int) -> int               # 1 = allow overshoot+settle
+extern fn agui_human_seed(n: int) -> int                   # seed RNG (0 = time-based)
+# path introspection — points of the last curved motion (for tests/replay):
+extern fn agui_path_len() -> int                           # number of recorded points
+extern fn agui_path_x(i: int) -> int                       # x of point i (-1 if oob)
+extern fn agui_path_y(i: int) -> int                       # y of point i (-1 if oob)
+
+# ── window ──
+extern fn agui_active_window() -> string               # focused window title ("")
+
+extern fn agui_version() -> string

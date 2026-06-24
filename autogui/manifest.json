@@ -1,0 +1,13 @@
+{
+  "name":         "autogui",
+  "version":      "1.4.0",
+  "type":         "c",
+  "description":  "Cross-platform keyboard & mouse automation (Linux/X11, Windows/Win32, macOS/CoreGraphics): move, drag, click, scroll, type, hotkeys, pixel color, wait-for-pixel, BMP+PNG screenshots, window title, human-like (antidetect) curved motion & timing",
+  "sources":      ["autogui.c"],
+  "header":       "autogui.ez",
+  "binary":       "libautogui.so",
+  "dependencies": [],
+  "link_flags_linux":   ["-lX11", "-lXtst"],
+  "link_flags_windows": ["-lgdi32", "-luser32"],
+  "link_flags_macos":   ["-framework", "ApplicationServices", "-framework", "CoreFoundation"]
+}

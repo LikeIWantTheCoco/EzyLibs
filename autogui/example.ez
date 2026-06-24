@@ -1,0 +1,32 @@
+# autogui demo.
+#   ezyl install ./autogui        # build & install the lib
+#   ezy run autogui/example.ez
+# Needs a running X11 session (won't work over headless SSH/Wayland-only).
+import "autogui"
+
+fn main():
+{
+    print("autogui:", agui_version())
+    print(f"screen: {agui_screen_width()}x{agui_screen_height()}")
+    print(f"cursor at: {agui_mouse_x()}, {agui_mouse_y()}")
+
+    # draw a small square with the cursor
+    agui_move(300, 300)
+    sleep(300)
+    agui_move(500, 300)
+    sleep(300)
+    agui_move(500, 500)
+    sleep(300)
+    agui_move(300, 500)
+    sleep(300)
+    agui_move(300, 300)
+
+    # type into whatever window has focus, then press Enter
+    sleep(500)
+    agui_type("Hello from Ezy autogui!")
+    agui_key_tap("Return")
+
+    # select-all then copy (Ctrl+A, Ctrl+C)
+    agui_hotkey("ctrl", "a")
+    agui_hotkey("ctrl", "c")
+}
