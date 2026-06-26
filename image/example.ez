@@ -1,0 +1,39 @@
+# image demo — make a thumbnail with a watermark, and a few effects.
+#   ezyl install ./image
+#   ezy run image/example.ez <input.jpg>
+import "image"
+
+fn main():
+{
+    # load an image (or build one if no file is handy)
+    src = load("photo.jpg")
+    if not src.ok():
+    {
+        print("no photo.jpg — building a placeholder")
+        src = new_image(640, 400, 40, 50, 70, 255)
+        src.circle(320, 200, 120, 240, 180, 60, 255, 1)
+    }
+    print(f"loaded {src.width()}x{src.height()}")
+
+    # 256px thumbnail, softened, with a caption
+    thumb = src.thumbnail(256)
+    thumb.brightness(10.0)
+    thumb.contrast(1.1)
+    thumb.text(8, 8, "made with Ezy", 18, 255, 255, 255)
+    thumb.save("thumb.png")
+    print("wrote thumb.png")
+
+    # a grayscale + edge-detected version
+    edges = src.clone()
+    edges.edges()
+    edges.save("edges.png")
+
+    # a watermarked, JPEG-compressed copy
+    wm = new_image(180, 36, 0, 0, 0, 150)
+    wm.text(8, 6, "© Ezy 2026", 20, 255, 255, 255)
+    out = src.clone()
+    out.overlay(wm, src.width() - 190, src.height() - 46, 230)
+    out.save_jpg("watermarked.jpg", 88)
+    print("wrote watermarked.jpg")
+    return 0
+}

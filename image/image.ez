@@ -1,0 +1,122 @@
+# ════════════════════════════════════════════════════════════════
+#  image — image processing for Ezy.
+#  Load PNG/JPG/BMP/GIF/…, save PNG/JPG/BMP, resize, crop, rotate/flip,
+#  colour-adjust, filter, compose, draw shapes + TTF text.
+#
+#  import "image"
+#  fn main():
+#  {
+#      im = load("photo.jpg")
+#      thumb = im.thumbnail(256)
+#      thumb.grayscale()
+#      thumb.text(8, 8, "© Ezy", 20, 255, 255, 255)
+#      thumb.save("thumb.png")
+#  }
+# ════════════════════════════════════════════════════════════════
+
+# ── flat C entry points ──
+extern fn img_load(path: string) -> int
+extern fn img_new(w: int, h: int, r: int, g: int, b: int, a: int) -> int
+extern fn img_clone(h: int) -> int
+extern fn img_save(h: int, path: string) -> int               # format by extension
+extern fn img_save_jpg(h: int, path: string, quality: int) -> int
+extern fn img_free(h: int) -> int
+
+extern fn img_width(h: int) -> int
+extern fn img_height(h: int) -> int
+extern fn img_format(path: string) -> string                  # "png"/"jpeg"/…
+extern fn img_filesize(path: string) -> int
+# metadata — read header only, no full decode:
+extern fn img_probe(path: string) -> string                   # "WxH, N channels, fmt"
+extern fn img_probe_width(path: string) -> int
+extern fn img_probe_height(path: string) -> int
+extern fn img_probe_channels(path: string) -> int             # original channels (1=gray,3=rgb,4=rgba)
+extern fn img_is_hdr(path: string) -> int
+
+extern fn img_resize(h: int, nw: int, nh: int) -> int         # returns NEW handle
+extern fn img_thumbnail(h: int, maxdim: int) -> int           # keep aspect ratio
+extern fn img_crop(h: int, x: int, y: int, w: int, hh: int) -> int
+extern fn img_rotate90(h: int, times: int) -> int             # clockwise * 90°
+extern fn img_flip_h(h: int) -> int
+extern fn img_flip_v(h: int) -> int
+
+extern fn img_brightness(h: int, delta: float) -> int         # -255..255 (in place)
+extern fn img_contrast(h: int, factor: float) -> int          # 1.0 = none
+extern fn img_saturation(h: int, factor: float) -> int        # 0 = gray, 1 = none
+extern fn img_gamma(h: int, g: float) -> int
+extern fn img_grayscale(h: int) -> int
+extern fn img_invert(h: int) -> int
+
+extern fn img_blur(h: int, radius: int) -> int
+extern fn img_sharpen(h: int) -> int
+extern fn img_edges(h: int) -> int                            # Sobel edge detect
+
+extern fn img_overlay(base: int, top: int, x: int, y: int, opacity: int) -> int
+extern fn img_fill(h: int, r: int, g: int, b: int, a: int) -> int
+extern fn img_set_pixel(h: int, x: int, y: int, r: int, g: int, b: int, a: int) -> int
+extern fn img_get_pixel(h: int, x: int, y: int) -> int        # 0xRRGGBBAA
+extern fn img_draw_rect(h: int, x: int, y: int, w: int, hh: int, r: int, g: int, b: int, a: int, fill: int) -> int
+extern fn img_draw_line(h: int, x1: int, y1: int, x2: int, y2: int, r: int, g: int, b: int, a: int) -> int
+extern fn img_draw_circle(h: int, cx: int, cy: int, rad: int, r: int, g: int, b: int, a: int, fill: int) -> int
+extern fn img_text(h: int, x: int, y: int, text: string, size: int, r: int, g: int, b: int) -> int
+extern fn img_set_font(path: string) -> int
+
+extern fn img_version() -> string
+
+# ════════════════════════════════════════════════════════════════
+#  OOP API — an Image wraps a handle. Transform methods (resize/crop/
+#  rotate/flip/clone/thumbnail) return a NEW Image; colour/filter/draw
+#  methods mutate in place.
+# ════════════════════════════════════════════════════════════════
+class Image:
+{
+    h: int
+
+    fn constructor(self, h: int): { self.h = h }
+
+    # info / io
+    fn ok(self) -> bool:        { return self.h >= 0 }
+    fn width(self) -> int:      { return img_width(self.h) }
+    fn height(self) -> int:     { return img_height(self.h) }
+    fn save(self, path: string) -> int:            { return img_save(self.h, path) }
+    fn save_jpg(self, path: string, q: int) -> int: { return img_save_jpg(self.h, path, q) }
+    fn free(self):              { img_free(self.h) }
+
+    # transforms → new Image
+    fn clone(self) -> Image:                 { return Image_new(img_clone(self.h)) }
+    fn resize(self, w: int, hh: int) -> Image: { return Image_new(img_resize(self.h, w, hh)) }
+    fn thumbnail(self, maxdim: int) -> Image: { return Image_new(img_thumbnail(self.h, maxdim)) }
+    fn crop(self, x: int, y: int, w: int, hh: int) -> Image: { return Image_new(img_crop(self.h, x, y, w, hh)) }
+    fn rotate90(self, times: int) -> Image:  { return Image_new(img_rotate90(self.h, times)) }
+    fn flip_h(self) -> Image:                { return Image_new(img_flip_h(self.h)) }
+    fn flip_v(self) -> Image:                { return Image_new(img_flip_v(self.h)) }
+
+    # colour (in place)
+    fn brightness(self, d: float):  { img_brightness(self.h, d) }
+    fn contrast(self, f: float):    { img_contrast(self.h, f) }
+    fn saturation(self, f: float):  { img_saturation(self.h, f) }
+    fn gamma(self, g: float):       { img_gamma(self.h, g) }
+    fn grayscale(self):             { img_grayscale(self.h) }
+    fn invert(self):                { img_invert(self.h) }
+
+    # filters (in place)
+    fn blur(self, radius: int):     { img_blur(self.h, radius) }
+    fn sharpen(self):               { img_sharpen(self.h) }
+    fn edges(self):                 { img_edges(self.h) }
+
+    # compose / draw (in place)
+    fn overlay(self, top: Image, x: int, y: int, opacity: int): { img_overlay(self.h, top.h, x, y, opacity) }
+    fn fill(self, r: int, g: int, b: int, a: int):              { img_fill(self.h, r, g, b, a) }
+    fn pixel(self, x: int, y: int) -> int:                      { return img_get_pixel(self.h, x, y) }
+    fn set_pixel(self, x: int, y: int, r: int, g: int, b: int, a: int): { img_set_pixel(self.h, x, y, r, g, b, a) }
+    fn rect(self, x: int, y: int, w: int, hh: int, r: int, g: int, b: int, a: int, fill: int): { img_draw_rect(self.h, x, y, w, hh, r, g, b, a, fill) }
+    fn line(self, x1: int, y1: int, x2: int, y2: int, r: int, g: int, b: int, a: int): { img_draw_line(self.h, x1, y1, x2, y2, r, g, b, a) }
+    fn circle(self, cx: int, cy: int, rad: int, r: int, g: int, b: int, a: int, fill: int): { img_draw_circle(self.h, cx, cy, rad, r, g, b, a, fill) }
+    fn text(self, x: int, y: int, t: string, size: int, r: int, g: int, b: int): { img_text(self.h, x, y, t, size, r, g, b) }
+}
+
+# ── constructors / helpers ──
+fn load(path: string) -> Image:                  { return Image_new(img_load(path)) }
+fn new_image(w: int, h: int, r: int = 0, g: int = 0, b: int = 0, a: int = 255) -> Image: { return Image_new(img_new(w, h, r, g, b, a)) }
+fn set_font(path: string) -> int:                { return img_set_font(path) }
+fn version() -> string:                          { return img_version() }
