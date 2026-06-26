@@ -16,6 +16,8 @@
 
 # ── flat C entry points ──
 extern fn img_load(path: string) -> int
+extern fn img_load_svg(path: string, width: int, height: int) -> int   # rasterize SVG
+extern fn img_svg_available() -> int                                   # 1 if librsvg present
 extern fn img_new(w: int, h: int, r: int, g: int, b: int, a: int) -> int
 extern fn img_clone(h: int) -> int
 extern fn img_save(h: int, path: string) -> int               # format by extension
@@ -117,6 +119,8 @@ class Image:
 
 # ── constructors / helpers ──
 fn load(path: string) -> Image:                  { return Image_new(img_load(path)) }
+fn load_svg(path: string, width: int = 0, height: int = 0) -> Image: { return Image_new(img_load_svg(path, width, height)) }
+fn svg_available() -> bool:                      { return img_svg_available() == 1 }
 fn new_image(w: int, h: int, r: int = 0, g: int = 0, b: int = 0, a: int = 255) -> Image: { return Image_new(img_new(w, h, r, g, b, a)) }
 fn set_font(path: string) -> int:                { return img_set_font(path) }
 fn version() -> string:                          { return img_version() }

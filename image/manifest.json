@@ -1,11 +1,11 @@
 {
   "name":         "image",
-  "version":      "1.0.0",
+  "version":      "1.1.0",
   "type":         "c",
-  "description":  "Image processing for Ezy: load PNG/JPG/BMP/GIF, save PNG/JPG/BMP, resize/crop/rotate/flip, colour adjust, filters, compositing, shapes and TTF text",
+  "description":  "Image processing for Ezy: load PNG/JPG/BMP/GIF/SVG, save PNG/JPG/BMP, resize/crop/rotate/flip, colour adjust, filters, compositing, shapes, TTF text and SVG rasterization",
   "sources":      ["image.c"],
   "header":       "image.ez",
   "binary":       "libimage.so",
   "dependencies": [],
-  "link_flags":   ["$(pkg-config --cflags --libs freetype2)", "-ljpeg", "-lm"]
+  "link_flags":   ["$(pkg-config --cflags --libs freetype2)", "-ljpeg", "-lm", "-ldl"]
 }

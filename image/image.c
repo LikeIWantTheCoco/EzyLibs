@@ -6530,6 +6530,7 @@ STBIDEF int stbi_info_from_callbacks(stbi_io_callbacks const *c, void *user, int
 #include <jpeglib.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include <dlfcn.h>
 
 /* ───────────────────────── image store ───────────────────────── */
 #define IMG_MAX 128
@@ -6567,6 +6568,98 @@ long long img_load(const char *path) {
     stbi_image_free(data);
     return slot;
 }
+
+/* ───────────────────────── SVG (rasterize via librsvg+cairo, dlopen'd) ─────
+   librsvg/cairo are loaded lazily at runtime so the core lib has no hard
+   dependency on them — SVG works only when they're installed. */
+typedef struct _RsvgHandle RsvgHandle;
+typedef struct { double x, y, width, height; } RsvgRectangle;
+static int g_svg_tried, g_svg_ok;
+static RsvgHandle *(*p_rsvg_new)(const char *, void **);
+static int (*p_rsvg_size)(RsvgHandle *, double *, double *);
+static int (*p_rsvg_render)(RsvgHandle *, void *, const RsvgRectangle *, void **);
+static void *(*p_surf_create)(int, int, int);
+static void *(*p_cairo_create)(void *);
+static void (*p_cairo_scale)(void *, double, double);
+static unsigned char *(*p_surf_data)(void *);
+static int (*p_surf_stride)(void *);
+static void (*p_surf_flush)(void *);
+static void (*p_cairo_destroy)(void *);
+static void (*p_surf_destroy)(void *);
+static void (*p_gobj_unref)(void *);
+
+static int svg_init(void) {
+    if (g_svg_tried) return g_svg_ok ? 0 : -1;
+    g_svg_tried = 1;
+    void *cairo = dlopen("libcairo.so.2", RTLD_NOW | RTLD_GLOBAL);
+    dlopen("libgobject-2.0.so.0", RTLD_NOW | RTLD_GLOBAL);
+    void *rsvg = dlopen("librsvg-2.so.2", RTLD_NOW | RTLD_GLOBAL);
+    void *gobj = dlopen("libgobject-2.0.so.0", RTLD_NOW | RTLD_GLOBAL);
+    if (!cairo || !rsvg) return -1;
+    p_rsvg_new   = dlsym(rsvg, "rsvg_handle_new_from_file");
+    p_rsvg_size  = dlsym(rsvg, "rsvg_handle_get_intrinsic_size_in_pixels");
+    p_rsvg_render= dlsym(rsvg, "rsvg_handle_render_document");
+    p_surf_create= dlsym(cairo, "cairo_image_surface_create");
+    p_cairo_create=dlsym(cairo, "cairo_create");
+    p_cairo_scale =dlsym(cairo, "cairo_scale");
+    p_surf_data  = dlsym(cairo, "cairo_image_surface_get_data");
+    p_surf_stride= dlsym(cairo, "cairo_image_surface_get_stride");
+    p_surf_flush = dlsym(cairo, "cairo_surface_flush");
+    p_cairo_destroy=dlsym(cairo, "cairo_destroy");
+    p_surf_destroy =dlsym(cairo, "cairo_surface_destroy");
+    p_gobj_unref = gobj ? dlsym(gobj, "g_object_unref") : NULL;
+    g_svg_ok = (p_rsvg_new && p_rsvg_size && p_rsvg_render && p_surf_create &&
+                p_cairo_create && p_cairo_scale && p_surf_data && p_surf_stride &&
+                p_surf_flush && p_cairo_destroy && p_surf_destroy) ? 1 : 0;
+    return g_svg_ok ? 0 : -1;
+}
+
+/* rasterize an SVG to an RGBA image. width/height <=0 → use intrinsic size;
+   give one to scale by it preserving aspect ratio. Returns handle or -1. */
+long long img_load_svg(const char *path, long long width, long long height) {
+    if (svg_init() < 0) return -1;
+    void *err = NULL;
+    RsvgHandle *hd = p_rsvg_new(path, &err);
+    if (!hd) return -1;
+    double iw = 0, ih = 0;
+    p_rsvg_size(hd, &iw, &ih);
+    if (iw <= 0) iw = 100;
+    if (ih <= 0) ih = 100;
+    int W = (int)width, H = (int)height;
+    if (W <= 0 && H <= 0) { W = (int)(iw + 0.5); H = (int)(ih + 0.5); }
+    else if (H <= 0) H = (int)(ih * W / iw + 0.5);
+    else if (W <= 0) W = (int)(iw * H / ih + 0.5);
+    if (W < 1) W = 1; if (H < 1) H = 1;
+
+    void *surf = p_surf_create(0 /*CAIRO_FORMAT_ARGB32*/, W, H);
+    void *cr = p_cairo_create(surf);
+    p_cairo_scale(cr, W / iw, H / ih);
+    RsvgRectangle vp = { 0, 0, iw, ih };
+    int rok = p_rsvg_render(hd, cr, &vp, &err);
+    p_surf_flush(surf);
+    unsigned char *d = p_surf_data(surf);
+    int stride = p_surf_stride(surf);
+
+    long long slot = -1;
+    if (rok && d) {
+        slot = slot_new(W, H);
+        if (slot >= 0) {
+            unsigned char *out = g_img[slot].px;
+            for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+                unsigned char *s = d + (size_t)y * stride + x * 4;   /* BGRA, premultiplied */
+                int b = s[0], g = s[1], r = s[2], a = s[3];
+                if (a > 0 && a < 255) { r = r * 255 / a; g = g * 255 / a; b = b * 255 / a; }   /* un-premultiply */
+                unsigned char *o = out + ((size_t)y * W + x) * 4;
+                o[0] = clamp8(r); o[1] = clamp8(g); o[2] = clamp8(b); o[3] = a;
+            }
+        }
+    }
+    p_cairo_destroy(cr); p_surf_destroy(surf);
+    if (p_gobj_unref) p_gobj_unref(hd);
+    return slot;
+}
+long long img_svg_available(void) { return svg_init() == 0 ? 1 : 0; }
+
 /* blank image filled with r,g,b,a */
 long long img_new(long long w, long long hh, long long r, long long g, long long b, long long a) {
     if (w <= 0 || hh <= 0) return -1;
@@ -6926,4 +7019,4 @@ long long img_text(long long h, long long x, long long y, const char *text,
     return 0;
 }
 
-char *img_version(void) { return (char *)"image 1.0.0 (stb_image + libjpeg + freetype)"; }
+char *img_version(void) { return (char *)"image 1.1.0 (stb_image + libjpeg + freetype + svg)"; }

@@ -62,7 +62,20 @@ structural metadata.
 | | Formats |
 |---|---|
 | **Decode** (`load`, `probe`) | JPEG, PNG, BMP, GIF (first frame), TGA, PSD, HDR, PIC, PNM (PPM/PGM) |
+| **Rasterize** (`load_svg`) | SVG (vector → RGBA, scalable) |
 | **Encode** (`save`, `save_jpg`) | PNG, BMP, JPEG |
+
+### SVG
+
+```ezy
+logo = load_svg("logo.svg")            # at intrinsic size
+big  = load_svg("logo.svg", 1024, 0)   # scale to width 1024, keep aspect → crisp
+```
+
+`load_svg(path, width=0, height=0)` rasterizes vector art; pass a width and/or
+height to scale (0 = intrinsic / aspect-preserved). SVG rendering uses
+**librsvg + cairo**, loaded lazily at runtime — the rest of the library works
+without them. `svg_available()` reports whether they're installed.
 
 > **Note:** transform methods return a **new** `Image`; colour/filter/draw
 > methods mutate the receiver in place. Assign returned images to a variable
