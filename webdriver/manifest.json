@@ -1,0 +1,11 @@
+{
+  "name":         "webdriver",
+  "version":      "1.1.0",
+  "type":         "c",
+  "description":  "Browser automation for Chromium (CDP) and Firefox (WebDriver BiDi): navigate, query, click, type, screenshot, cookies, JS eval, anti-detection + human curved-mouse input",
+  "sources":      ["webdriver.c"],
+  "header":       "webdriver.ez",
+  "binary":       "libwebdriver.so",
+  "dependencies": [],
+  "link_flags":   ["-lm"]
+}

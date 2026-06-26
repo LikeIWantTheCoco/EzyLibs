@@ -1,0 +1,188 @@
+# ════════════════════════════════════════════════════════════════
+#  webdriver — browser automation.
+#    • Chromium / Chrome / Brave / Edge  → Chrome DevTools Protocol (CDP)
+#    • Firefox / Gecko                   → WebDriver BiDi
+#  Same OOP API for both; the protocol is chosen by the launcher.
+#
+#  import "webdriver"
+#  fn main():
+#  {
+#      b = chrome()                     # or firefox(); chrome(1)/firefox(1) = headless
+#      b.goto("https://example.com")    # `goto` (not `go` — reserved)
+#      print(b.text("h1"))
+#      b.anti_detection()               # hide automation + spoof fingerprints
+#      b.human_click("#login")          # curved-mouse, human-timed click
+#      b.close()
+#  }
+# ════════════════════════════════════════════════════════════════
+
+# ── flat C entry points ──
+extern fn wd_chrome(headless: int, width: int, height: int, user_agent: string, profile: string) -> int
+extern fn wd_firefox(headless: int, width: int, height: int, user_agent: string, profile: string) -> int
+extern fn wd_close(h: int) -> int
+extern fn wd_eval(h: int, expr: string) -> string
+extern fn wd_go(h: int, url: string) -> int
+extern fn wd_current_url(h: int) -> string
+extern fn wd_title(h: int) -> string
+extern fn wd_html(h: int) -> string
+extern fn wd_back(h: int) -> int
+extern fn wd_forward(h: int) -> int
+extern fn wd_refresh(h: int) -> int
+extern fn wd_screenshot(h: int, path: string) -> int
+extern fn wd_wait_ready(h: int, timeout_ms: int) -> int
+
+extern fn wd_exists(h: int, sel: string, idx: int) -> int
+extern fn wd_count(h: int, sel: string) -> int
+extern fn wd_text(h: int, sel: string, idx: int) -> string
+extern fn wd_inner_html(h: int, sel: string, idx: int) -> string
+extern fn wd_attr(h: int, sel: string, idx: int, name: string) -> string
+extern fn wd_is_visible(h: int, sel: string, idx: int) -> int
+extern fn wd_is_enabled(h: int, sel: string, idx: int) -> int
+extern fn wd_clear(h: int, sel: string, idx: int) -> int
+extern fn wd_click(h: int, sel: string, idx: int) -> int
+extern fn wd_type(h: int, sel: string, idx: int, text: string) -> int
+extern fn wd_wait_for(h: int, sel: string, timeout_ms: int) -> int
+extern fn wd_wait_for_not(h: int, sel: string, timeout_ms: int) -> int
+extern fn wd_wait_for_text(h: int, sel: string, text: string, timeout_ms: int) -> int
+extern fn wd_find_text(h: int, text: string) -> int
+
+extern fn wd_human_click(h: int, sel: string, idx: int) -> int
+extern fn wd_human_type(h: int, sel: string, idx: int, text: string) -> int
+extern fn wd_random_scroll(h: int) -> int
+extern fn wd_random_delay(min_ms: int, max_ms: int) -> int
+
+extern fn wd_hide_automation(h: int) -> int
+extern fn wd_spoof_webgl(h: int) -> int
+extern fn wd_spoof_canvas(h: int) -> int
+extern fn wd_spoof_audio(h: int) -> int
+extern fn wd_set_viewport(h: int, w: int, ht: int) -> int
+extern fn wd_set_user_agent(h: int, ua: string) -> int
+extern fn wd_set_timezone(h: int, tz: string) -> int
+extern fn wd_anti_detection(h: int) -> int
+
+extern fn wd_cookies(h: int) -> string
+extern fn wd_set_cookie(h: int, name: string, value: string) -> int
+extern fn wd_delete_cookie(h: int, name: string) -> int
+extern fn wd_clear_cookies(h: int) -> int
+extern fn wd_maximize(h: int) -> int
+extern fn wd_version() -> string
+
+# ════════════════════════════════════════════════════════════════
+#  OOP API — Element + Browser classes wrapping the handle.
+# ════════════════════════════════════════════════════════════════
+
+# An element is a (browser handle, CSS selector, index) triple; every call
+# re-resolves the selector live, so handles never go stale across navigations.
+class Element:
+{
+    h:   int
+    sel: string
+    idx: int
+
+    fn constructor(self, h: int, sel: string, idx: int):
+    {
+        self.h = h
+        self.sel = sel
+        self.idx = idx
+    }
+
+    fn click(self):              { wd_click(self.h, self.sel, self.idx) }
+    fn human_click(self):        { wd_human_click(self.h, self.sel, self.idx) }
+    fn write(self, t: string):   { wd_type(self.h, self.sel, self.idx, t) }   # type text (`type` is reserved)
+    fn human_write(self, t: string): { wd_human_type(self.h, self.sel, self.idx, t) }
+    fn clear(self):              { wd_clear(self.h, self.sel, self.idx) }
+    fn text(self) -> string:     { return wd_text(self.h, self.sel, self.idx) }
+    fn html(self) -> string:     { return wd_inner_html(self.h, self.sel, self.idx) }
+    fn attr(self, name: string) -> string: { return wd_attr(self.h, self.sel, self.idx, name) }
+    fn exists(self) -> bool:     { return wd_exists(self.h, self.sel, self.idx) == 1 }
+    fn is_visible(self) -> bool: { return wd_is_visible(self.h, self.sel, self.idx) == 1 }
+    fn is_enabled(self) -> bool: { return wd_is_enabled(self.h, self.sel, self.idx) == 1 }
+    # find a descendant by combining selectors (CSS only)
+    fn find(self, sub: string) -> Element: { return Element_new(self.h, self.sel + " " + sub, 0) }
+}
+
+class Browser:
+{
+    h: int
+
+    fn constructor(self, h: int): { self.h = h }
+
+    # navigation  (`goto` because `go` is reserved for goroutines)
+    fn goto(self, url: string) -> int: { return wd_go(self.h, url) }
+    fn back(self):     { wd_back(self.h) }
+    fn forward(self):  { wd_forward(self.h) }
+    fn refresh(self):  { wd_refresh(self.h) }
+    fn current_url(self) -> string: { return wd_current_url(self.h) }
+    fn title(self) -> string:       { return wd_title(self.h) }
+    fn html(self) -> string:        { return wd_html(self.h) }
+    fn screenshot(self, path: string) -> int: { return wd_screenshot(self.h, path) }
+
+    # selection
+    fn find(self, sel: string) -> Element:  { return Element_new(self.h, sel, 0) }
+    fn nth(self, sel: string, i: int) -> Element: { return Element_new(self.h, sel, i) }
+    fn count(self, sel: string) -> int:     { return wd_count(self.h, sel) }
+    fn exists(self, sel: string) -> bool:   { return wd_exists(self.h, sel, 0) == 1 }
+    fn find_text(self, text: string) -> bool: { return wd_find_text(self.h, text) == 1 }
+
+    # ── selector shortcuts (no chaining needed — act on the first match) ──
+    # Ezy can't call a method on a returned object directly (b.find(x).text()
+    # gives a wrong result); these one-call helpers avoid that.
+    fn text(self, sel: string) -> string:   { return wd_text(self.h, sel, 0) }
+    fn click(self, sel: string):            { wd_click(self.h, sel, 0) }
+    fn write(self, sel: string, t: string): { wd_type(self.h, sel, 0, t) }
+    fn attr(self, sel: string, name: string) -> string: { return wd_attr(self.h, sel, 0, name) }
+    fn inner_html(self, sel: string) -> string: { return wd_inner_html(self.h, sel, 0) }
+    fn is_visible(self, sel: string) -> bool: { return wd_is_visible(self.h, sel, 0) == 1 }
+    fn is_enabled(self, sel: string) -> bool: { return wd_is_enabled(self.h, sel, 0) == 1 }
+    fn clear(self, sel: string):            { wd_clear(self.h, sel, 0) }
+
+    # waits
+    fn wait_for_page(self, timeout_ms: int) -> int:   { return wd_wait_ready(self.h, timeout_ms) }
+    fn wait_for(self, sel: string, timeout_ms: int) -> int: { return wd_wait_for(self.h, sel, timeout_ms) }
+    fn wait_for_not(self, sel: string, timeout_ms: int) -> int: { return wd_wait_for_not(self.h, sel, timeout_ms) }
+    fn wait_for_text(self, sel: string, text: string, timeout_ms: int) -> int: { return wd_wait_for_text(self.h, sel, text, timeout_ms) }
+
+    # JavaScript
+    fn eval(self, expr: string) -> string: { return wd_eval(self.h, expr) }
+
+    # human / anti-detection
+    fn anti_detection(self) -> int:   { return wd_anti_detection(self.h) }
+    fn hide_automation(self) -> int:  { return wd_hide_automation(self.h) }
+    fn spoof_webgl(self) -> int:      { return wd_spoof_webgl(self.h) }
+    fn spoof_canvas(self) -> int:     { return wd_spoof_canvas(self.h) }
+    fn spoof_audio(self) -> int:      { return wd_spoof_audio(self.h) }
+    fn set_user_agent(self, ua: string) -> int: { return wd_set_user_agent(self.h, ua) }
+    fn set_viewport(self, w: int, ht: int) -> int: { return wd_set_viewport(self.h, w, ht) }
+    fn set_timezone(self, tz: string) -> int: { return wd_set_timezone(self.h, tz) }
+    fn human_click(self, sel: string) -> int: { return wd_human_click(self.h, sel, 0) }
+    fn human_type(self, sel: string, t: string) -> int: { return wd_human_type(self.h, sel, 0, t) }
+    fn random_scroll(self) -> int:    { return wd_random_scroll(self.h) }
+    fn random_delay(self, a: int, b: int) -> int: { return wd_random_delay(a, b) }
+
+    # cookies
+    fn cookies(self) -> string:               { return wd_cookies(self.h) }
+    fn set_cookie(self, n: string, v: string) -> int: { return wd_set_cookie(self.h, n, v) }
+    fn delete_cookie(self, n: string) -> int: { return wd_delete_cookie(self.h, n) }
+    fn clear_cookies(self) -> int:            { return wd_clear_cookies(self.h) }
+
+    fn maximize(self) -> int: { return wd_maximize(self.h) }
+    fn close(self) -> int:    { return wd_close(self.h) }
+}
+
+# ── launchers ──
+fn chrome(headless: int = 0, width: int = 1280, height: int = 800) -> Browser:
+{
+    h = wd_chrome(headless, width, height, "", "")
+    return Browser_new(h)
+}
+fn chrome_profile(profile: string, headless: int = 0) -> Browser:
+{
+    h = wd_chrome(headless, 1280, 800, "", profile)
+    return Browser_new(h)
+}
+fn firefox(headless: int = 0, width: int = 1280, height: int = 800) -> Browser:
+{
+    h = wd_firefox(headless, width, height, "", "")
+    return Browser_new(h)
+}
+fn version() -> string: { return wd_version() }

@@ -1,0 +1,34 @@
+# webdriver demo — drive a browser over CDP (Chromium) or BiDi (Firefox).
+#   ezyl install ./webdriver
+#   ezy run webdriver/example.ez
+# Chromium/Chrome/Brave/Edge (EZY_CHROME=...) or Firefox (EZY_FIREFOX=...).
+import "webdriver"
+
+fn main():
+{
+    print("webdriver:", version())
+
+    b = chrome(1)                      # headless; chrome(0) visible. Or: firefox(1)
+    b.anti_detection()                 # hide navigator.webdriver + spoof fingerprints
+
+    b.goto("https://example.com")
+    print("title:", b.title())
+    print("url:", b.current_url())
+    print("h1:", b.text("h1"))
+
+    # JavaScript straight into the page
+    print("links on page:", b.eval("document.querySelectorAll('a').length"))
+
+    # human, curved-mouse interaction (real Input events)
+    if b.exists("a"):
+    {
+        b.human_click("a")             # curved path + human-timed press
+        b.wait_for_page(10000)
+        print("after click, url:", b.current_url())
+    }
+
+    b.screenshot("example.png")
+    print("saved example.png")
+    b.close()
+    return 0
+}
