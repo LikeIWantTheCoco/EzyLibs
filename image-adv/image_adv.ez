@@ -1,0 +1,26 @@
+
+# ════════════════════════════════════════════════════════════════
+#  image-adv — advanced extras for `image` (comparison + OCR).
+#  Extension lib: `import "image-adv"` brings the WHOLE image API into
+#  scope (this header is appended to image's) plus the extras below.
+# ════════════════════════════════════════════════════════════════
+
+# ── flat C entry points ──
+extern fn imgadv_compare(a: int, b: int) -> float           # 0.0 identical .. 1.0 (-1 size mismatch)
+extern fn imgadv_equal(a: int, b: int) -> int               # 1 if pixel-identical
+extern fn imgadv_changed_pct(a: int, b: int, threshold: int) -> float   # % pixels changed
+extern fn imgadv_diff(a: int, b: int) -> int                # new image: changes highlighted red
+extern fn imgadv_ocr(h: int, lang: string) -> string        # OCR a loaded image
+extern fn imgadv_ocr_file(path: string, lang: string) -> string
+extern fn imgadv_ocr_available() -> int
+extern fn imgadv_version() -> string
+
+# ── ergonomic wrappers over the Image class (defined in image's header) ──
+fn compare(a: Image, b: Image) -> float:                 { return imgadv_compare(a.h, b.h) }
+fn equal(a: Image, b: Image) -> bool:                    { return imgadv_equal(a.h, b.h) == 1 }
+fn changed_pct(a: Image, b: Image, threshold: int = 25) -> float: { return imgadv_changed_pct(a.h, b.h, threshold) }
+fn diff(a: Image, b: Image) -> Image:                    { return Image_new(imgadv_diff(a.h, b.h)) }
+fn ocr(im: Image, lang: string = "eng") -> string:       { return imgadv_ocr(im.h, lang) }
+fn ocr_file(path: string, lang: string = "eng") -> string: { return imgadv_ocr_file(path, lang) }
+fn ocr_available() -> bool:                              { return imgadv_ocr_available() == 1 }
+fn adv_version() -> string:                              { return imgadv_version() }

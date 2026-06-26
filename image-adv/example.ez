@@ -1,0 +1,48 @@
+# image-adv demo — compare two images and OCR a third.
+#   ezyl install ./image            # the base lib (image-adv extends it)
+#   ezyl install ./image-adv
+#   ezy run image-adv/example.ez
+# `import "image-adv"` brings the whole `image` API in scope too.
+import "image-adv"
+
+fn main():
+{
+    print(adv_version())
+
+    # ── change detection between two frames ──
+    before = load("frame1.png")
+    if not before.ok():
+    {
+        # no input → synthesize a pair
+        before = new_image(320, 200, 235, 235, 235, 255)
+        before.rect(30, 30, 120, 90, 60, 120, 200, 255, 1)
+        after = before.clone()
+        after.circle(240, 140, 40, 220, 70, 70, 255, 1)
+    }
+    else:
+    {
+        after = load("frame2.png")
+    }
+
+    print(f"difference: {compare(before, after):.4f}  changed: {changed_pct(before, after, 25):.1f}%")
+    if not equal(before, after):
+    {
+        d = diff(before, after)        # red = changed, gray = same
+        d.save("changes.png")
+        print("wrote changes.png")
+    }
+
+    # ── OCR ──
+    if ocr_available():
+    {
+        scan = load("document.png")
+        if not scan.ok():
+        {
+            scan = new_image(500, 80, 255, 255, 255, 255)
+            scan.text(12, 16, "Digitalize this text", 36, 0, 0, 0)
+        }
+        text = ocr(scan, "eng")
+        print("OCR:", text)
+    }
+    return 0
+}

@@ -6942,6 +6942,8 @@ long long img_get_pixel(long long h, long long x, long long y) {
     unsigned char *p = m->px + ((size_t)y*m->w+x)*4;
     return ((long long)p[0]<<24)|((long long)p[1]<<16)|((long long)p[2]<<8)|p[3];   /* 0xRRGGBBAA */
 }
+/* raw RGBA8 buffer for a handle — infrastructure for extension libs (image-adv) */
+unsigned char *img_pixels(long long h) { image_t *m = IMG(h); return m ? m->px : NULL; }
 long long img_fill(long long h, long long r, long long g, long long b, long long a) {
     image_t *m = IMG(h); if (!m) return -1;
     for(size_t i=0;i<(size_t)m->w*m->h;i++){m->px[i*4]=r;m->px[i*4+1]=g;m->px[i*4+2]=b;m->px[i*4+3]=a;}

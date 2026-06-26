@@ -1,0 +1,12 @@
+{
+  "name":         "image-adv",
+  "version":      "1.0.0",
+  "type":         "c",
+  "extends":      "image",
+  "description":  "Advanced extras for the image library: image comparison / change detection and OCR (tesseract)",
+  "sources":      ["image_adv.c"],
+  "header":       "image_adv.ez",
+  "binary":       "libimage-adv.so",
+  "dependencies": [],
+  "link_flags":   []
+}
