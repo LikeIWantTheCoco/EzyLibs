@@ -1,0 +1,22 @@
+# Echo round-trip against a public WebSocket echo server.
+#   ezyl install ./websocket
+#   ezy run example.ez
+import "websocket"
+
+fn main():
+{
+    ws = ws_connect("wss://ws.postman-echo.com/raw")
+    if ws < 0:
+    {
+        print("connect failed")
+        return 1
+    }
+    print("connected:", ws_version())
+
+    ws_send(ws, "hello from Ezy")
+    reply = ws_recv_timeout(ws, 5000)
+    print("echo:", reply)
+
+    ws_close(ws)
+    return 0
+}

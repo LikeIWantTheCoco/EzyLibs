@@ -1,0 +1,15 @@
+# ── websocket: RFC 6455 WebSocket client for Ezy ──────────────
+# Connect with ws_connect("ws://..." or "wss://..."), which returns
+# an integer handle (>= 0) or -1 on error. Send/receive text frames;
+# ping and close frames are handled for you. ws_recv returns "" when
+# the connection has closed — check ws_connected() to be sure.
+
+extern fn ws_connect(url: string) -> int               # ws:// or wss:// -> handle (-1 err)
+extern fn ws_send(h: int, text: string) -> int         # send a text message -> 0 ok / -1 err
+extern fn ws_recv(h: int) -> string                    # blocking recv one message ("" on close)
+extern fn ws_recv_timeout(h: int, ms: int) -> string   # recv with timeout ms ("" if none/closed)
+extern fn ws_ping(h: int, payload: string) -> int      # send a ping -> 0 ok / -1 err
+extern fn ws_connected(h: int) -> int                  # 1 if still open, else 0
+extern fn ws_error(h: int) -> string                   # last error text for the handle
+extern fn ws_close(h: int) -> int                      # close + tear down (always 0)
+extern fn ws_version() -> string

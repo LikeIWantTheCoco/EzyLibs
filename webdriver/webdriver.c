@@ -65,21 +65,7 @@ static void json_escape(str_t *out, const char *in) {
     }
 }
 
-/* ───────────────────────── base64 ───────────────────────── */
-static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-static char *b64_encode(const unsigned char *in, size_t n) {
-    char *out = malloc(((n + 2) / 3) * 4 + 1); size_t o = 0;
-    for (size_t i = 0; i < n; i += 3) {
-        unsigned v = in[i] << 16;
-        if (i + 1 < n) v |= in[i+1] << 8;
-        if (i + 2 < n) v |= in[i+2];
-        out[o++] = B64[(v >> 18) & 63];
-        out[o++] = B64[(v >> 12) & 63];
-        out[o++] = (i + 1 < n) ? B64[(v >> 6) & 63] : '=';
-        out[o++] = (i + 2 < n) ? B64[v & 63] : '=';
-    }
-    out[o] = 0; return out;
-}
+/* ───────────────────────── base64 (decode only — screenshots) ───────────────────────── */
 static int b64_val(char c) {
     if (c >= 'A' && c <= 'Z') return c - 'A';
     if (c >= 'a' && c <= 'z') return c - 'a' + 26;
@@ -200,16 +186,7 @@ static jnode *j_path(jnode *o, const char *path) {
     return cur;
 }
 
-/* ───────────────────────── sockets ───────────────────────── */
-static int readn(int fd, void *buf, size_t n) {
-    size_t got = 0; char *p = buf;
-    while (got < n) {
-        ssize_t r = recv(fd, p + got, n - got, 0);
-        if (r <= 0) return -1;
-        got += r;
-    }
-    return 0;
-}
+/* ───────────────────────── sockets (HTTP GET to the DevTools /json endpoint) ───────────────────────── */
 static int writen(int fd, const void *buf, size_t n) {
     size_t sent = 0; const char *p = buf;
     while (sent < n) {
@@ -257,73 +234,22 @@ static char *http_get(const char *host, int port, const char *path) {
     return out;
 }
 
-/* ───────────────────────── WebSocket client ───────────────────────── */
-static int ws_handshake(int fd, const char *host, int port, const char *path) {
-    unsigned char key[16];
-    for (int i = 0; i < 16; i++) key[i] = rand() & 0xff;
-    char *k = b64_encode(key, 16);
-    str_t req; str_init(&req);
-    str_add(&req, "GET "); str_add(&req, path); str_add(&req, " HTTP/1.1\r\n");
-    str_add(&req, "Host: "); str_add(&req, host); { char b[16]; snprintf(b, sizeof b, ":%d", port); str_add(&req, b); }
-    str_add(&req, "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n");
-    str_add(&req, "Sec-WebSocket-Key: "); str_add(&req, k); str_add(&req, "\r\n");
-    str_add(&req, "Sec-WebSocket-Version: 13\r\n\r\n");
-    free(k);
-    int rc = writen(fd, req.p, req.len); free(req.p);
-    if (rc < 0) return -1;
-    /* read response headers up to \r\n\r\n */
-    str_t resp; str_init(&resp); char c;
-    while (recv(fd, &c, 1, 0) == 1) {
-        str_addc(&resp, c);
-        if (resp.len >= 4 && !memcmp(resp.p + resp.len - 4, "\r\n\r\n", 4)) break;
-        if (resp.len > 8192) break;
-    }
-    int ok = strstr(resp.p, "101") != NULL;
-    free(resp.p);
-    return ok ? 0 : -1;
-}
-static int ws_send(int fd, const char *data) {
-    size_t n = strlen(data);
-    str_t f; str_init(&f);
-    str_addc(&f, (char)0x81);              /* FIN + text */
-    unsigned char mask[4]; for (int i = 0; i < 4; i++) mask[i] = rand() & 0xff;
-    if (n <= 125) { str_addc(&f, (char)(0x80 | n)); }
-    else if (n <= 0xFFFF) { str_addc(&f, (char)(0x80 | 126)); str_addc(&f, (n>>8)&0xff); str_addc(&f, n&0xff); }
-    else { str_addc(&f, (char)(0x80 | 127)); for (int i = 7; i >= 0; i--) str_addc(&f, (n >> (i*8)) & 0xff); }
-    str_addn(&f, (char *)mask, 4);
-    for (size_t i = 0; i < n; i++) str_addc(&f, data[i] ^ mask[i & 3]);
-    int rc = writen(fd, f.p, f.len); free(f.p);
-    return rc;
-}
-/* receive one full (possibly fragmented) text message; malloc'd, caller frees */
-static char *ws_recv(int fd) {
-    str_t msg; str_init(&msg);
-    for (;;) {
-        unsigned char h[2];
-        if (readn(fd, h, 2) < 0) { free(msg.p); return NULL; }
-        int fin = h[0] & 0x80, op = h[0] & 0x0f;
-        unsigned long len = h[1] & 0x7f;
-        if (len == 126) { unsigned char e[2]; if (readn(fd, e, 2) < 0) { free(msg.p); return NULL; } len = (e[0]<<8)|e[1]; }
-        else if (len == 127) { unsigned char e[8]; if (readn(fd, e, 8) < 0) { free(msg.p); return NULL; } len = 0; for (int i = 0; i < 8; i++) len = (len<<8)|e[i]; }
-        if (h[1] & 0x80) { unsigned char mk[4]; if (readn(fd, mk, 4) < 0) { free(msg.p); return NULL; } } /* server frames unmasked normally */
-        char *payload = malloc(len + 1);
-        if (len && readn(fd, payload, len) < 0) { free(payload); free(msg.p); return NULL; }
-        payload[len] = 0;
-        if (op == 0x8) { free(payload); free(msg.p); return NULL; }     /* close */
-        if (op == 0x9) { free(payload); continue; }                     /* ping → ignore */
-        if (op == 0xA) { free(payload); continue; }                     /* pong */
-        str_addn(&msg, payload, len); free(payload);
-        if (fin) break;
-    }
-    return msg.p;
-}
+/* ───────────────────────── WebSocket client ─────────────────────────
+   Provided by the `websocket` library, declared in the manifest's
+   "dependencies": ["websocket"]. ezyl links libwebdriver.so against
+   libwebsocket.so (NEEDED + rpath), so these symbols resolve at runtime.
+   We connect with a ws:// URL and talk in whole text messages by handle. */
+extern long long ws_connect(const char *url);
+extern long long ws_send(long long h, const char *text);
+extern char     *ws_recv_timeout(long long h, long long ms);
+extern long long ws_close(long long h);
 
 /* ───────────────────────── sessions ───────────────────────── */
 #define WD_MAX 8
 #define WD_CDP  0     /* Chromium DevTools Protocol */
 #define WD_BIDI 1     /* Firefox/Gecko WebDriver BiDi */
 typedef struct {
-    int used, fd, port;
+    int used, ws, port;    /* ws = websocket-lib connection handle */
     pid_t pid;
     int next_id;
     int proto;             /* WD_CDP | WD_BIDI */
@@ -347,11 +273,11 @@ static char *cdp_call(wd_session *s, const char *method, const char *params) {
     str_add(&req, head); str_add(&req, method); str_add(&req, "\",\"params\":");
     str_add(&req, params && *params ? params : "{}");
     str_addc(&req, '}');
-    int rc = ws_send(s->fd, req.p); free(req.p);
+    int rc = ws_send(s->ws, req.p); free(req.p);
     if (rc < 0) return NULL;
     for (int tries = 0; tries < 1000; tries++) {
-        char *r = ws_recv(s->fd);
-        if (!r) return NULL;
+        char *r = ws_recv_timeout(s->ws, 30000);   /* never block forever */
+        if (!r || !r[0]) { free(r); return NULL; }
         jnode *root = json_parse(r);
         jnode *jid = j_get(root, "id");
         if (jid && jid->t == JNUM && (int)jid->num == id) { j_free(root); return r; }
@@ -489,23 +415,13 @@ long long wd_chrome(long long headless, long long width, long long height,
     fprintf(stderr, "[wd] got wsurl=%s\n", wsurl);
 #endif
 
-    /* parse ws://127.0.0.1:PORT/devtools/page/ID → path */
-    char *path = strstr(wsurl, "://");
-    path = path ? strchr(path + 3, '/') : NULL;
-    if (!path) { free(wsurl); kill(pid, SIGKILL); return -1; }
-    char pathbuf[512]; snprintf(pathbuf, sizeof pathbuf, "%s", path);
+    /* hand the full ws:// URL to the websocket lib (it does TCP + handshake) */
+    int ws = ws_connect(wsurl);
     free(wsurl);
-
-    int fd = tcp_connect("127.0.0.1", port);
-    if (fd < 0 || ws_handshake(fd, "127.0.0.1", port, pathbuf) < 0) {
-        if (fd >= 0) close(fd);
-        kill(pid, SIGKILL); return -1;
-    }
-    s->fd = fd; s->used = 1; s->next_id = 0;
-    /* safety net: never block forever waiting on a CDP response */
-    { struct timeval tv = { 30, 0 }; setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv); }
+    if (ws < 0) { kill(pid, SIGKILL); return -1; }
+    s->ws = ws; s->used = 1; s->next_id = 0;
 #ifdef WD_DEBUG
-    fprintf(stderr, "[wd] ws handshake ok, path=%s\n", pathbuf);
+    fprintf(stderr, "[wd] ws connected, handle=%d\n", ws);
 #endif
 
     /* enable the domains we use */
@@ -616,25 +532,21 @@ long long wd_firefox(long long headless, long long width, long long height,
     s->pid = pid; s->port = port;
 
     /* Firefox doesn't serve /json; wait until the BiDi port accepts a
-       connection, then use the fixed /session endpoint. */
-    const char *pathbuf = "/session";
-    int fd = -1;
+       WebSocket on the fixed /session endpoint. */
+    char wsurl[64]; snprintf(wsurl, sizeof wsurl, "ws://127.0.0.1:%d/session", port);
+    int ws = -1;
     for (int t = 0; t < 200; t++) {
-        fd = tcp_connect("127.0.0.1", port);
-        if (fd >= 0) break;
+        ws = ws_connect(wsurl);
+        if (ws >= 0) break;
         msleep(100);
     }
 #ifdef WD_DEBUG
-    fprintf(stderr, "[wd] firefox port up, fd=%d, path=%s\n", fd, pathbuf);
+    fprintf(stderr, "[wd] firefox bidi connected, handle=%d, url=%s\n", ws, wsurl);
 #endif
-    if (fd < 0 || ws_handshake(fd, "127.0.0.1", port, pathbuf) < 0) {
-        if (fd >= 0) close(fd);
-        kill(pid, SIGKILL); return -1;
-    }
-    s->fd = fd; s->used = 1; s->next_id = 0;
-    { struct timeval tv = { 30, 0 }; setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv); }
+    if (ws < 0) { kill(pid, SIGKILL); return -1; }
+    s->ws = ws; s->used = 1; s->next_id = 0;
 
-    if (bidi_setup(s) < 0) { close(fd); kill(pid, SIGKILL); s->used = 0; return -1; }
+    if (bidi_setup(s) < 0) { ws_close(s->ws); kill(pid, SIGKILL); s->used = 0; return -1; }
 #ifdef WD_DEBUG
     fprintf(stderr, "[wd] bidi ctx=%s\n", s->ctx);
 #endif
@@ -651,7 +563,7 @@ long long wd_close(long long h) {
     wd_session *s = S(h);
     if (!s) return -1;
     char *r = cdp_call(s, s->proto == WD_BIDI ? "browser.close" : "Browser.close", "{}"); free(r);
-    if (s->fd >= 0) close(s->fd);
+    ws_close(s->ws);
     if (s->pid > 0) { kill(s->pid, SIGTERM); msleep(150); kill(s->pid, SIGKILL); waitpid(s->pid, NULL, WNOHANG); }
     char cmd[400]; snprintf(cmd, sizeof cmd, "rm -rf '%s' 2>/dev/null", s->profile_dir); if (system(cmd)){}
     s->used = 0;

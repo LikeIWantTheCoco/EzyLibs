@@ -1,0 +1,11 @@
+{
+  "name":         "websocket",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "RFC 6455 WebSocket client for Ezy: ws:// and wss:// (TLS via OpenSSL)",
+  "sources":      ["websocket.c"],
+  "header":       "websocket.ez",
+  "binary":       "libwebsocket.so",
+  "dependencies": [],
+  "link_flags":   ["-l:libssl.so.3", "-l:libcrypto.so.3"]
+}
