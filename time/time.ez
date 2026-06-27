@@ -1,0 +1,66 @@
+# ── time: date / clock / sleep for Ezy ────────────────────────
+# These used to be native (time.now(), year(), sleep(), ...). They now
+# live in this library to keep the runtime lean. Use the OOP `Time` class:
+#
+#   import "time"
+#   fn main():
+#   {
+#       t = Time_new()
+#       print(t.datetime())        # "2026-06-27 15:24:09"
+#       print(t.year(), t.month()) # 2026 6
+#       t.sleep(200)               # sleep 200 ms
+#       print(t.elapsed(), "s")    # seconds since the Time was created
+#   }
+
+extern fn time_unix() -> int                       # epoch seconds
+extern fn time_now_ms() -> int                     # epoch milliseconds
+extern fn time_mono() -> float                     # monotonic clock (seconds)
+extern fn time_sleep_ms(ms: int)                   # sleep N milliseconds
+extern fn time_date() -> string                    # "YYYY-MM-DD" (local)
+extern fn time_datetime() -> string                # "YYYY-MM-DD HH:MM:SS" (local)
+extern fn time_strftime(fmt: string, ts: int) -> string   # format an epoch ts
+extern fn time_year() -> int
+extern fn time_month() -> int
+extern fn time_day() -> int
+extern fn time_hour() -> int
+extern fn time_minute() -> int
+extern fn time_second() -> int
+extern fn time_weekday() -> int                    # 0=Sunday .. 6=Saturday
+extern fn time_version() -> string
+
+# ════════════════════════════════════════════════════════════════
+#  OOP API — the Time class wraps the calls above.
+# ════════════════════════════════════════════════════════════════
+class Time:
+{
+    started: int        # epoch seconds when this Time was created
+
+    fn constructor(self):
+    {
+        self.started = time_unix()
+    }
+
+    # clocks
+    fn unix(self) -> int:    { return time_unix() }       # epoch seconds
+    fn now(self) -> int:     { return time_now_ms() }     # epoch milliseconds
+    fn mono(self) -> float:  { return time_mono() }       # monotonic seconds
+    fn clock(self) -> float: { return time_mono() }       # alias of mono
+    fn sleep(self, ms: int): { time_sleep_ms(ms) }
+    fn elapsed(self) -> int: { return time_unix() - self.started }
+
+    # calendar (current local time)
+    fn date(self) -> string:     { return time_date() }
+    fn datetime(self) -> string: { return time_datetime() }
+    fn iso(self) -> string:      { return time_datetime() }
+    fn year(self) -> int:    { return time_year() }
+    fn month(self) -> int:   { return time_month() }
+    fn day(self) -> int:     { return time_day() }
+    fn hour(self) -> int:    { return time_hour() }
+    fn minute(self) -> int:  { return time_minute() }
+    fn second(self) -> int:  { return time_second() }
+    fn weekday(self) -> int: { return time_weekday() }
+
+    # formatting
+    fn format(self, fmt: string) -> string: { return time_strftime(fmt, time_unix()) }
+    fn strftime(self, fmt: string, ts: int) -> string: { return time_strftime(fmt, ts) }
+}

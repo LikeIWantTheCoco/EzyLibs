@@ -1,0 +1,11 @@
+{
+  "name":         "time",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "Date, clock and sleep for Ezy (Time class) — moved out of the runtime",
+  "sources":      ["time.c"],
+  "header":       "time.ez",
+  "binary":       "libtime.so",
+  "dependencies": [],
+  "link_flags":   []
+}

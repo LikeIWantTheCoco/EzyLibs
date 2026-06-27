@@ -1,0 +1,18 @@
+import "time"
+
+fn main():
+{
+    t = Time_new()
+    print("version:", time_version())
+    print("date:    ", t.date())
+    print("datetime:", t.datetime())
+    print("ymd:     ", t.year(), t.month(), t.day())
+    print("hms:     ", t.hour(), t.minute(), t.second())
+    print("unix:    ", t.unix())
+    print("formatted:", t.format("%A, %d %B %Y"))
+
+    start = t.mono()
+    t.sleep(150)
+    print("slept ~", t.mono() - start, "s")
+    return 0
+}
