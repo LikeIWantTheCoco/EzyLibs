@@ -1,0 +1,11 @@
+{
+  "name":         "os",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "OS utilities for Ezy: environment, processes, filesystem and paths — moved out of the runtime",
+  "sources":      ["os.c"],
+  "header":       "os.ez",
+  "binary":       "libos.so",
+  "dependencies": [],
+  "link_flags":   []
+}

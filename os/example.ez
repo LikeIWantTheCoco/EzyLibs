@@ -1,0 +1,28 @@
+import "os"
+
+fn main():
+{
+    print("version: ", os_version())
+    print("platform:", os_platform(), os_arch())
+    print("host:    ", os_hostname())
+    print("pid:     ", os_pid())
+    print("cwd:     ", os_getcwd())
+    print("PATH set:", os_getenv("PATH").len() > 0)
+
+    tmp = "/tmp/ezy_os_demo.txt"
+    os_write(tmp, "line one\nline two\n")
+    print("size:    ", os_filesize(tmp), "bytes")
+    lines = os_read(tmp).split("\n")      # .split() on a var keeps string elem type
+    for line in lines:
+    {
+        if line.len() > 0: { print("  >", line) }
+    }
+    os_delete(tmp)
+
+    print("dirname: ", os_dirname("/a/b/c.txt"))
+    print("basename:", os_basename("/a/b/c.txt"))
+    print("ext:     ", os_path_ext("/a/b/c.txt"))
+    print("join:    ", os_path_join("/a/b", "c.txt"))
+    print("echo:    ", os_run_capture("echo from a subprocess").strip())
+    return 0
+}
