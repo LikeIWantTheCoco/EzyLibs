@@ -13,11 +13,28 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <limits.h>
 #include <dirent.h>
 #include <sys/stat.h>
-#include <sys/utsname.h>
+
+#ifdef _WIN32
+  #include <windows.h>
+  #include <direct.h>
+  #include <process.h>
+  #define EZY_MKDIR(p)   _mkdir(p)
+  #define EZY_GETCWD     _getcwd
+  #define EZY_CHDIR      _chdir
+  #define EZY_POPEN      _popen
+  #define EZY_PCLOSE     _pclose
+#else
+  #include <unistd.h>
+  #include <sys/utsname.h>
+  #define EZY_MKDIR(p)   mkdir((p), 0755)
+  #define EZY_GETCWD     getcwd
+  #define EZY_CHDIR      chdir
+  #define EZY_POPEN      popen
+  #define EZY_PCLOSE     pclose
+#endif
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -31,11 +48,19 @@ char *os_getenv(const char *name) {
 }
 long long os_setenv(const char *name, const char *value) {
     if (!name) return 0;
+#ifdef _WIN32
+    return _putenv_s(name, value ? value : "") == 0 ? 1 : 0;
+#else
     return setenv(name, value ? value : "", 1) == 0 ? 1 : 0;
+#endif
 }
 long long os_unsetenv(const char *name) {
     if (!name) return 0;
+#ifdef _WIN32
+    return _putenv_s(name, "") == 0 ? 1 : 0;
+#else
     return unsetenv(name) == 0 ? 1 : 0;
+#endif
 }
 
 /* ───────────────────────── processes ───────────────────────── */
@@ -49,7 +74,7 @@ long long os_run(const char *cmd) {
 /* run a command and capture its stdout as a string */
 char *os_run_capture(const char *cmd) {
     if (!cmd) return strdup("");
-    FILE *p = popen(cmd, "r");
+    FILE *p = EZY_POPEN(cmd, "r");
     if (!p) return strdup("");
     size_t cap = 4096, len = 0;
     char *buf = malloc(cap);
@@ -60,19 +85,25 @@ char *os_run_capture(const char *cmd) {
         memcpy(buf + len, tmp, n); len += n;
     }
     buf[len] = 0;
-    pclose(p);
+    EZY_PCLOSE(p);
     return buf;
 }
+#ifdef _WIN32
+long long os_pid(void)  { return (long long)_getpid(); }
+long long os_ppid(void) { return 0; }
+char *os_hostname(void) { const char *h = getenv("COMPUTERNAME"); return strdup(h ? h : ""); }
+char *os_platform(void) { return strdup("windows"); }
+char *os_arch(void)     { const char *a = getenv("PROCESSOR_ARCHITECTURE"); return strdup(a ? a : "x86_64"); }
+#else
 long long os_pid(void)  { return (long long)getpid(); }
 long long os_ppid(void) { return (long long)getppid(); }
-
 char *os_hostname(void) {
     char b[256];
     if (gethostname(b, sizeof b) != 0) return strdup("");
     b[sizeof b - 1] = 0;
     return strdup(b);
 }
-/* OS name: "linux", "darwin", "windows", ... (lowercased uname sysname) */
+/* OS name: "linux", "darwin", ... (lowercased uname sysname) */
 char *os_platform(void) {
     struct utsname u;
     if (uname(&u) != 0) return strdup("unknown");
@@ -85,18 +116,19 @@ char *os_arch(void) {
     if (uname(&u) != 0) return strdup("unknown");
     return strdup(u.machine);
 }
+#endif
 
 /* ───────────────────────── directories / cwd ───────────────────────── */
 char *os_getcwd(void) {
     char buf[PATH_MAX];
-    if (!getcwd(buf, sizeof buf)) return strdup(".");
+    if (!EZY_GETCWD(buf, sizeof buf)) return strdup(".");
     return strdup(buf);
 }
-long long os_chdir(const char *p) { return (p && chdir(p) == 0) ? 1 : 0; }
+long long os_chdir(const char *p) { return (p && EZY_CHDIR(p) == 0) ? 1 : 0; }
 
 long long os_mkdir(const char *p) {
     if (!p) return 0;
-    return mkdir(p, 0755) == 0 ? 1 : 0;
+    return EZY_MKDIR(p) == 0 ? 1 : 0;
 }
 /* remove a file, or a directory and everything under it */
 long long os_rmdir(const char *p) {
@@ -236,7 +268,11 @@ char *os_path_stem(const char *p) {
 char *os_abspath(const char *p) {
     if (!p) return strdup(".");
     char r[PATH_MAX];
+#ifdef _WIN32
+    if (!_fullpath(r, p, sizeof r)) return strdup(p);
+#else
     if (!realpath(p, r)) return strdup(p);
+#endif
     return strdup(r);
 }
 
