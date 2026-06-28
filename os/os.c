@@ -29,6 +29,8 @@
 #else
   #include <unistd.h>
   #include <sys/utsname.h>
+  #include <sys/types.h>
+  #include <glob.h>
   #define EZY_MKDIR(p)   mkdir((p), 0755)
   #define EZY_GETCWD     getcwd
   #define EZY_CHDIR      chdir
@@ -61,6 +63,43 @@ long long os_unsetenv(const char *name) {
 #else
     return unsetenv(name) == 0 ? 1 : 0;
 #endif
+}
+/* the current user's home directory */
+char *os_homedir(void) {
+    const char *h = getenv("HOME");
+    if (!h || !*h) h = getenv("USERPROFILE");   /* windows fallback */
+    return strdup(h && *h ? h : "");
+}
+/* the system temp directory */
+char *os_tmpdir(void) {
+    const char *t = getenv("TMPDIR");
+    if (!t || !*t) t = getenv("TMP");
+    if (!t || !*t) t = getenv("TEMP");
+    return strdup(t && *t ? t : "/tmp");
+}
+/* the current username */
+char *os_user(void) {
+    const char *u = getenv("USER");
+    if (!u || !*u) u = getenv("LOGNAME");
+    if (!u || !*u) u = getenv("USERNAME");      /* windows */
+    return strdup(u && *u ? u : "");
+}
+/* all environment variables as newline-separated KEY=VALUE pairs */
+char *os_environ(void) {
+#ifdef _WIN32
+    extern char **_environ; char **env = _environ;
+#else
+    extern char **environ; char **env = environ;
+#endif
+    size_t cap = 4096, len = 0; char *buf = malloc(cap);
+    if (env) for (char **e = env; *e; e++) {
+        size_t n = strlen(*e);
+        if (len + n + 2 > cap) { while (len + n + 2 > cap) cap *= 2; buf = realloc(buf, cap); }
+        if (len) buf[len++] = '\n';
+        memcpy(buf + len, *e, n); len += n;
+    }
+    buf[len] = 0;
+    return buf;
 }
 
 /* ───────────────────────── processes ───────────────────────── */
@@ -213,6 +252,111 @@ long long os_filesize(const char *p) {
     if (stat(p, &st) != 0) return -1;
     return (long long)st.st_size;
 }
+/* create a directory and all missing parents (mkdir -p) */
+long long os_mkdirs(const char *p) {
+    if (!p || !*p) return 0;
+    char tmp[PATH_MAX];
+    snprintf(tmp, sizeof tmp, "%s", p);
+    size_t n = strlen(tmp);
+    if (n && tmp[n-1] == '/') tmp[n-1] = 0;
+    for (char *c = tmp + 1; *c; c++) {
+        if (*c == '/') {
+            *c = 0;
+            struct stat st;
+            if (stat(tmp, &st) != 0) EZY_MKDIR(tmp);
+            *c = '/';
+        }
+    }
+    struct stat st;
+    if (stat(tmp, &st) == 0) return S_ISDIR(st.st_mode) ? 1 : 0;
+    return EZY_MKDIR(tmp) == 0 ? 1 : 0;
+}
+/* set file permissions from an octal string, e.g. "755" */
+long long os_chmod(const char *p, const char *octal) {
+#ifdef _WIN32
+    (void)p; (void)octal; return 0;     /* Windows: see the per-OS os lib */
+#else
+    if (!p || !octal) return 0;
+    long m = strtol(octal, NULL, 8);
+    return chmod(p, (mode_t)m) == 0 ? 1 : 0;
+#endif
+}
+/* test access: mode is any of "r","w","x" (e.g. "rw"); 1 if all are permitted */
+long long os_access(const char *p, const char *mode) {
+#ifdef _WIN32
+    (void)mode; struct stat st; return (p && stat(p,&st)==0) ? 1 : 0;
+#else
+    if (!p) return 0;
+    int m = F_OK;
+    for (const char *c = mode ? mode : ""; *c; c++) {
+        if (*c == 'r') m |= R_OK;
+        else if (*c == 'w') m |= W_OK;
+        else if (*c == 'x') m |= X_OK;
+    }
+    return access(p, m) == 0 ? 1 : 0;
+#endif
+}
+/* expand a shell glob ("*.txt") → newline-separated matches */
+char *os_glob(const char *pattern) {
+#ifdef _WIN32
+    (void)pattern; return strdup("");   /* Windows: see the per-OS os lib */
+#else
+    if (!pattern) return strdup("");
+    glob_t g;
+    if (glob(pattern, 0, NULL, &g) != 0) { globfree(&g); return strdup(""); }
+    size_t cap = 4096, len = 0; char *buf = malloc(cap);
+    for (size_t i = 0; i < g.gl_pathc; i++) {
+        size_t n = strlen(g.gl_pathv[i]);
+        if (len + n + 2 > cap) { while (len + n + 2 > cap) cap *= 2; buf = realloc(buf, cap); }
+        if (len) buf[len++] = '\n';
+        memcpy(buf + len, g.gl_pathv[i], n); len += n;
+    }
+    buf[len] = 0;
+    globfree(&g);
+    return buf;
+#endif
+}
+/* create a unique temp file, return its path ("" on failure) */
+char *os_tempfile(void) {
+#ifdef _WIN32
+    char *p = _tempnam(NULL, "ezy"); char *r = strdup(p ? p : ""); free(p); return r;
+#else
+    char tmpl[PATH_MAX];
+    const char *d = getenv("TMPDIR"); if (!d || !*d) d = "/tmp";
+    snprintf(tmpl, sizeof tmpl, "%s/ezyXXXXXX", d);
+    int fd = mkstemp(tmpl);
+    if (fd < 0) return strdup("");
+    close(fd);
+    return strdup(tmpl);
+#endif
+}
+/* symbolic links */
+long long os_symlink(const char *target, const char *linkpath) {
+#ifdef _WIN32
+    (void)target; (void)linkpath; return 0;
+#else
+    return (target && linkpath && symlink(target, linkpath) == 0) ? 1 : 0;
+#endif
+}
+char *os_readlink(const char *p) {
+#ifdef _WIN32
+    (void)p; return strdup("");
+#else
+    if (!p) return strdup("");
+    char buf[PATH_MAX];
+    ssize_t n = readlink(p, buf, sizeof buf - 1);
+    if (n < 0) return strdup("");
+    buf[n] = 0; return strdup(buf);
+#endif
+}
+long long os_islink(const char *p) {
+#ifdef _WIN32
+    (void)p; return 0;
+#else
+    struct stat st;
+    return (p && lstat(p, &st) == 0 && S_ISLNK(st.st_mode)) ? 1 : 0;
+#endif
+}
 
 /* ───────────────────────── path queries ───────────────────────── */
 long long os_exists(const char *p) { struct stat st; return (p && stat(p,&st)==0) ? 1 : 0; }
@@ -274,6 +418,62 @@ char *os_abspath(const char *p) {
     if (!realpath(p, r)) return strdup(p);
 #endif
     return strdup(r);
+}
+
+/* is this an absolute path? */
+long long os_isabs(const char *p) { return (p && p[0] == '/') ? 1 : 0; }
+
+/* normalize a path: collapse "//", "." and ".." lexically (no filesystem access) */
+char *os_normpath(const char *p) {
+    if (!p || !*p) return strdup(".");
+    int absolute = (p[0] == '/');
+    /* split on '/', resolving . and .. into a component stack */
+    char *parts[512]; int np = 0;
+    char *work = strdup(p);
+    for (char *tok = strtok(work, "/"); tok; tok = strtok(NULL, "/")) {
+        if (!strcmp(tok, ".") || !*tok) continue;
+        if (!strcmp(tok, "..")) {
+            if (np > 0 && strcmp(parts[np-1], "..")) np--;
+            else if (!absolute) parts[np++] = tok;   /* keep leading .. on relative paths */
+        } else if (np < 512) parts[np++] = tok;
+    }
+    size_t cap = strlen(p) + 4, len = 0; char *out = malloc(cap);
+    if (absolute) out[len++] = '/';
+    for (int i = 0; i < np; i++) {
+        if (i) out[len++] = '/';
+        size_t n = strlen(parts[i]); memcpy(out + len, parts[i], n); len += n;
+    }
+    if (len == 0) out[len++] = absolute ? '/' : '.';
+    out[len] = 0;
+    free(work);
+    return out;
+}
+
+/* path of `target` relative to `base` (base defaults to the cwd if empty) */
+char *os_relpath(const char *target, const char *base) {
+    if (!target) return strdup(".");
+    char *cwd = NULL;
+    if (!base || !*base) { cwd = os_getcwd(); base = cwd; }
+    char *at = os_abspath(target), *ab = os_abspath(base);
+    char *nt = os_normpath(at), *nb = os_normpath(ab);
+    free(at); free(ab);
+    /* split both into components */
+    char *tw = strdup(nt), *bw = strdup(nb);
+    char *tp[512], *bp[512]; int nt2 = 0, nb2 = 0;
+    for (char *t = strtok(tw, "/"); t; t = strtok(NULL, "/")) if (nt2 < 512) tp[nt2++] = t;
+    for (char *b = strtok(bw, "/"); b; b = strtok(NULL, "/")) if (nb2 < 512) bp[nb2++] = b;
+    int i = 0; while (i < nt2 && i < nb2 && !strcmp(tp[i], bp[i])) i++;
+    size_t cap = strlen(nt) + (size_t)nb2 * 3 + 8, len = 0; char *out = malloc(cap);
+    for (int j = i; j < nb2; j++) { memcpy(out+len, "../", 3); len += 3; }   /* up from base */
+    for (int j = i; j < nt2; j++) {                                          /* down to target */
+        size_t n = strlen(tp[j]); memcpy(out+len, tp[j], n); len += n;
+        if (j < nt2 - 1) out[len++] = '/';
+    }
+    if (len == 0) out[len++] = '.';
+    else if (out[len-1] == '/') len--;
+    out[len] = 0;
+    free(nt); free(nb); free(tw); free(bw); free(cwd);
+    return out;
 }
 
 char *os_version(void) { return strdup("os 1.0.0"); }

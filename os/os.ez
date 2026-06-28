@@ -17,6 +17,10 @@
 extern fn os_getenv(name: string) -> string         # "" if unset
 extern fn os_setenv(name: string, value: string) -> int
 extern fn os_unsetenv(name: string) -> int
+extern fn os_environ() -> string                    # newline-separated KEY=VALUE
+extern fn os_homedir() -> string                    # the user's home dir
+extern fn os_tmpdir() -> string                     # system temp dir
+extern fn os_user() -> string                       # current username
 
 # ── processes ──
 extern fn os_run(cmd: string) -> int                # run shell cmd -> exit status
@@ -31,8 +35,10 @@ extern fn os_arch() -> string                       # "x86_64" / "aarch64" / ...
 extern fn os_getcwd() -> string
 extern fn os_chdir(path: string) -> int
 extern fn os_mkdir(path: string) -> int
+extern fn os_mkdirs(path: string) -> int            # create parents too (mkdir -p)
 extern fn os_rmdir(path: string) -> int             # recursive (rm -rf)
 extern fn os_listdir(path: string) -> string        # newline-separated names
+extern fn os_glob(pattern: string) -> string        # glob matches, newline-separated
 
 # ── files ──
 extern fn os_read(path: string) -> string
@@ -43,11 +49,20 @@ extern fn os_copy(src: string, dst: string) -> int
 extern fn os_move(src: string, dst: string) -> int
 extern fn os_touch(path: string) -> int
 extern fn os_filesize(path: string) -> int
+extern fn os_tempfile() -> string                   # create a unique temp file -> its path
+extern fn os_chmod(path: string, octal: string) -> int   # e.g. os_chmod(f, "755")
+extern fn os_access(path: string, mode: string) -> int   # mode = any of "rwx"; 1 if allowed
+
+# ── symbolic links ──
+extern fn os_symlink(target: string, linkpath: string) -> int
+extern fn os_readlink(path: string) -> string
+extern fn os_islink(path: string) -> int
 
 # ── path queries ──
 extern fn os_exists(path: string) -> int
 extern fn os_isfile(path: string) -> int
 extern fn os_isdir(path: string) -> int
+extern fn os_isabs(path: string) -> int
 extern fn os_mtime(path: string) -> int
 
 # ── path manipulation ──
@@ -57,6 +72,8 @@ extern fn os_path_join(a: string, b: string) -> string
 extern fn os_path_ext(path: string) -> string
 extern fn os_path_stem(path: string) -> string
 extern fn os_abspath(path: string) -> string
+extern fn os_normpath(path: string) -> string       # collapse // . .. lexically
+extern fn os_relpath(target: string, base: string) -> string
 
 extern fn os_version() -> string
 
