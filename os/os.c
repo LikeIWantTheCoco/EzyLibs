@@ -17,10 +17,30 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
-#ifdef _WIN32
+/* ── platform detection ──────────────────────────────────────────
+   Implemented: linux, windows, macos. Reserved (compile via the POSIX
+   path for now, to be specialised later): android, ios.            */
+#if defined(_WIN32)
+  #define EZY_WINDOWS 1
+#else
+  #define EZY_POSIX 1
+  #if defined(__ANDROID__)
+    #define EZY_ANDROID 1     /* TODO: Android-specific os lib */
+  #elif defined(__APPLE__)
+    #include <TargetConditionals.h>
+    #if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+      #define EZY_IOS 1       /* TODO: iOS-specific os lib */
+    #else
+      #define EZY_MACOS 1
+    #endif
+  #endif
+#endif
+
+#ifdef EZY_WINDOWS
   #include <windows.h>
   #include <direct.h>
   #include <process.h>
+  #include <io.h>
   #define EZY_MKDIR(p)   _mkdir(p)
   #define EZY_GETCWD     _getcwd
   #define EZY_CHDIR      _chdir
@@ -139,8 +159,26 @@ long long os_ppid(void) { return 0; }
 char *os_hostname(void) { const char *h = getenv("COMPUTERNAME"); return strdup(h ? h : ""); }
 char *os_platform(void) { return strdup("windows"); }
 char *os_arch(void)     { const char *a = getenv("PROCESSOR_ARCHITECTURE"); return strdup(a ? a : "x86_64"); }
-long long os_exec(EzyArr *argv) { (void)argv; return -1; }   /* see the per-OS os lib */
-long long os_kill(long long pid, long long sig) { (void)pid; (void)sig; return 0; }
+/* run argv directly, wait, return exit status */
+long long os_exec(EzyArr *argv) {
+    if (!argv || argv->len <= 0) return -1;
+    int n = (int)argv->len;
+    const char **a = malloc((size_t)(n + 1) * sizeof(char *));
+    for (int i = 0; i < n; i++) a[i] = (const char *)(size_t)argv->data[i];
+    a[n] = NULL;
+    intptr_t rc = _spawnvp(_P_WAIT, a[0], a);
+    free(a);
+    return (long long)rc;       /* exit code, or -1 on failure */
+}
+/* terminate a process (sig is ignored on Windows) */
+long long os_kill(long long pid, long long sig) {
+    (void)sig;
+    HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)pid);
+    if (!h) return 0;
+    int ok = TerminateProcess(h, 1) ? 1 : 0;
+    CloseHandle(h);
+    return ok;
+}
 #else
 long long os_pid(void)  { return (long long)getpid(); }
 long long os_ppid(void) { return (long long)getppid(); }
@@ -169,12 +207,20 @@ long long os_exec(EzyArr *argv) {
 long long os_kill(long long pid, long long sig) {
     return kill((pid_t)pid, (int)sig) == 0 ? 1 : 0;
 }
-/* OS name: "linux", "darwin", ... (lowercased uname sysname) */
+/* OS name: "linux", "macos", "android", "ios", ... */
 char *os_platform(void) {
+#if defined(EZY_ANDROID)
+    return strdup("android");
+#elif defined(EZY_IOS)
+    return strdup("ios");
+#elif defined(EZY_MACOS)
+    return strdup("macos");
+#else
     struct utsname u;
     if (uname(&u) != 0) return strdup("unknown");
     for (char *c = u.sysname; *c; c++) if (*c >= 'A' && *c <= 'Z') *c += 32;
     return strdup(u.sysname);
+#endif
 }
 /* CPU architecture: "x86_64", "aarch64", ... */
 char *os_arch(void) {
@@ -300,20 +346,27 @@ long long os_mkdirs(const char *p) {
 }
 /* set file permissions from an octal string, e.g. "755" */
 long long os_chmod(const char *p, const char *octal) {
-#ifdef _WIN32
-    (void)p; (void)octal; return 0;     /* Windows: see the per-OS os lib */
-#else
     if (!p || !octal) return 0;
     long m = strtol(octal, NULL, 8);
+#ifdef EZY_WINDOWS
+    /* Windows only models the read-only bit: writable if any write bit is set */
+    int wm = (m & 0200) ? (_S_IREAD | _S_IWRITE) : _S_IREAD;
+    return _chmod(p, wm) == 0 ? 1 : 0;
+#else
     return chmod(p, (mode_t)m) == 0 ? 1 : 0;
 #endif
 }
 /* test access: mode is any of "r","w","x" (e.g. "rw"); 1 if all are permitted */
 long long os_access(const char *p, const char *mode) {
-#ifdef _WIN32
-    (void)mode; struct stat st; return (p && stat(p,&st)==0) ? 1 : 0;
-#else
     if (!p) return 0;
+#ifdef EZY_WINDOWS
+    int m = 0;   /* _access: 0=exists, 2=write, 4=read (no execute bit on Windows) */
+    for (const char *c = mode ? mode : ""; *c; c++) {
+        if (*c == 'r') m |= 4;
+        else if (*c == 'w') m |= 2;
+    }
+    return _access(p, m) == 0 ? 1 : 0;
+#else
     int m = F_OK;
     for (const char *c = mode ? mode : ""; *c; c++) {
         if (*c == 'r') m |= R_OK;
@@ -325,10 +378,29 @@ long long os_access(const char *p, const char *mode) {
 }
 /* expand a shell glob ("*.txt") → newline-separated matches */
 char *os_glob(const char *pattern) {
-#ifdef _WIN32
-    (void)pattern; return strdup("");   /* Windows: see the per-OS os lib */
-#else
     if (!pattern) return strdup("");
+#ifdef EZY_WINDOWS
+    WIN32_FIND_DATA fd;
+    HANDLE h = FindFirstFile(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return strdup("");
+    /* matches come back as basenames; re-attach the pattern's directory */
+    char dir[PATH_MAX] = "";
+    const char *bs = strrchr(pattern, '\\'), *fs = strrchr(pattern, '/');
+    const char *slash = bs > fs ? bs : fs;   /* last separator of either kind */
+    if (slash) { size_t dn = (size_t)(slash - pattern) + 1; memcpy(dir, pattern, dn); dir[dn] = 0; }
+    size_t cap = 4096, len = 0; char *buf = malloc(cap);
+    do {
+        if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+        char full[PATH_MAX]; snprintf(full, sizeof full, "%s%s", dir, fd.cFileName);
+        size_t n = strlen(full);
+        if (len + n + 2 > cap) { while (len + n + 2 > cap) cap *= 2; buf = realloc(buf, cap); }
+        if (len) buf[len++] = '\n';
+        memcpy(buf + len, full, n); len += n;
+    } while (FindNextFile(h, &fd));
+    FindClose(h);
+    buf[len] = 0;
+    return buf;
+#else
     glob_t g;
     if (glob(pattern, 0, NULL, &g) != 0) { globfree(&g); return strdup(""); }
     size_t cap = 4096, len = 0; char *buf = malloc(cap);
@@ -359,17 +431,35 @@ char *os_tempfile(void) {
 }
 /* symbolic links */
 long long os_symlink(const char *target, const char *linkpath) {
-#ifdef _WIN32
-    (void)target; (void)linkpath; return 0;
+    if (!target || !linkpath) return 0;
+#ifdef EZY_WINDOWS
+    DWORD flags = 0;
+    DWORD a = GetFileAttributes(target);
+    if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY))
+        flags |= SYMBOLIC_LINK_FLAG_DIRECTORY;
+    #ifdef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
+    flags |= SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+    #endif
+    return CreateSymbolicLink(linkpath, target, flags) ? 1 : 0;
 #else
-    return (target && linkpath && symlink(target, linkpath) == 0) ? 1 : 0;
+    return symlink(target, linkpath) == 0 ? 1 : 0;
 #endif
 }
 char *os_readlink(const char *p) {
-#ifdef _WIN32
-    (void)p; return strdup("");
-#else
     if (!p) return strdup("");
+#ifdef EZY_WINDOWS
+    HANDLE h = CreateFile(p, 0, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                          FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (h == INVALID_HANDLE_VALUE) return strdup("");
+    char buf[PATH_MAX];
+    DWORD n = GetFinalPathNameByHandle(h, buf, sizeof buf - 1, 0);
+    CloseHandle(h);
+    if (n == 0 || n >= sizeof buf) return strdup("");
+    buf[n] = 0;
+    /* strip the \\?\ prefix GetFinalPathNameByHandle prepends */
+    const char *r = strncmp(buf, "\\\\?\\", 4) == 0 ? buf + 4 : buf;
+    return strdup(r);
+#else
     char buf[PATH_MAX];
     ssize_t n = readlink(p, buf, sizeof buf - 1);
     if (n < 0) return strdup("");
@@ -377,11 +467,13 @@ char *os_readlink(const char *p) {
 #endif
 }
 long long os_islink(const char *p) {
-#ifdef _WIN32
-    (void)p; return 0;
+    if (!p) return 0;
+#ifdef EZY_WINDOWS
+    DWORD a = GetFileAttributes(p);
+    return (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_REPARSE_POINT)) ? 1 : 0;
 #else
     struct stat st;
-    return (p && lstat(p, &st) == 0 && S_ISLNK(st.st_mode)) ? 1 : 0;
+    return (lstat(p, &st) == 0 && S_ISLNK(st.st_mode)) ? 1 : 0;
 #endif
 }
 
