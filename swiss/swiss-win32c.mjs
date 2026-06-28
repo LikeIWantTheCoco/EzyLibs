@@ -566,6 +566,10 @@ function emit(ast, opts) {
       const s = String(raw);
       if (k === 'padding') o.padding = num(s);
       else if (k === 'margin') { if (/auto/.test(s)) o.alignSelf = 'center'; else o.margin = num(s); }
+      else if (k === 'marginTop') o.marginTop = num(s);
+      else if (k === 'marginBottom') o.marginBottom = num(s);
+      else if (k === 'marginLeft') o.marginLeft = num(s);
+      else if (k === 'marginRight') o.marginRight = num(s);
       else if (k === 'alignSelf') o.alignSelf = s;
       else if (k === 'width') { if (s === '100%') { /* fill cross-axis (stretch handles it) */ } else o.width = num(s); }
       else if (k === 'maxWidth' || k === 'minWidth') o.width = num(s);
@@ -629,7 +633,10 @@ function emit(ast, opts) {
     const align = st && ALIGN[st.alignItems] != null ? ALIGN[st.alignItems] : (dir === 0 ? 3 : 0); // column default stretch
     const justify = st && ALIGN[st.justifyContent] != null ? ALIGN[st.justifyContent] : 0;
     const selfalign = st && ALIGN[st.alignSelf] != null && ALIGN[st.alignSelf] !== 3 ? ALIGN[st.alignSelf] : 0; // self-align in parent (margin auto / alignSelf)
-    return { dir, pad, gap, w, h, flex, align, justify, selfalign };
+    const m = Number((st && st.margin) || 0);
+    const side = (k) => st && st[k] != null ? Number(st[k]) : m;
+    const mt = side('marginTop'), mb = side('marginBottom'), ml = side('marginLeft'), mr = side('marginRight');
+    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr };
   }
   // apply font + text color to a freshly created control hwnd expr
   function applyControl(hw, st, kind) {
@@ -686,7 +693,10 @@ function emit(ast, opts) {
     if (HSIZE[tag]) st = Object.assign({ fontSize: HSIZE[tag], fontWeight: 'bold' }, st || {});
     const na = nodeArgs(st);
     const mkNode = (hw) => `swiss_leaf(${hw}, ${na.w}, ${na.h}, ${na.flex})`;
-    const selfStep = (nv) => { if (na.selfalign) out.build.push(`  ${nv}->selfalign = ${na.selfalign};`); };
+    const selfStep = (nv) => {
+      if (na.selfalign) out.build.push(`  ${nv}->selfalign = ${na.selfalign};`);
+      if (na.mt || na.mb || na.ml || na.mr) out.build.push(`  ${nv}->mt = ${na.mt}; ${nv}->mb = ${na.mb}; ${nv}->ml = ${na.ml}; ${nv}->mr = ${na.mr};`);
+    };
     const pack = (nodeExpr) => { if (parent) out.build.push(`  swiss_add(${parent}, ${nodeExpr});`); };
     const dyn = planDynVisible; // (handled in buildCond)
 
@@ -1105,6 +1115,7 @@ typedef struct Node {
   int w, h, flex;            // requested size (-1 auto) + main-axis grow factor
   int justify, align;        // main / cross alignment (0 start 1 center 2 end 3 stretch)
   int selfalign;             // self cross-align in parent (0 inherit, 1 center, 2 end) — margin auto / alignSelf
+  int mt, mb, ml, mr;        // margins (outer spacing around the node)
   COLORREF bg; int hasbg, visible;
 } Node;
 
@@ -1149,9 +1160,10 @@ static void swiss_measure(Node* n, int* mw, int* mh) {
   if (n->hwnd) { swiss_measure_leaf(n, mw, mh); return; }
   int main = 0, cross = 0, vis = 0;
   for (int i = 0; i < n->nkids; i++) {
-    if (!n->kids[i]->visible) continue;
-    int cw, ch; swiss_measure(n->kids[i], &cw, &ch);
-    int cm = n->dir ? cw : ch, cc = n->dir ? ch : cw;
+    Node* k = n->kids[i]; if (!k->visible) continue;
+    int cw, ch; swiss_measure(k, &cw, &ch);
+    int cm = (n->dir ? cw : ch) + (n->dir ? k->ml + k->mr : k->mt + k->mb);  // + main-axis margins
+    int cc = (n->dir ? ch : cw) + (n->dir ? k->mt + k->mb : k->ml + k->mr);  // + cross-axis margins
     main += cm; if (cc > cross) cross = cc; vis++;
   }
   if (vis > 1) main += n->gap * (vis - 1);
@@ -1166,9 +1178,10 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
   int avail = n->dir ? iw : ih;
   int used = 0, vis = 0, totflex = 0;
   for (int i = 0; i < n->nkids; i++) {
-    if (!n->kids[i]->visible) continue;
-    int cw, ch; swiss_measure(n->kids[i], &cw, &ch);
-    used += n->dir ? cw : ch; vis++; totflex += n->kids[i]->flex;
+    Node* k = n->kids[i]; if (!k->visible) continue;
+    int cw, ch; swiss_measure(k, &cw, &ch);
+    used += (n->dir ? cw : ch) + (n->dir ? k->ml + k->mr : k->mt + k->mb);  // + main-axis margins
+    vis++; totflex += k->flex;
   }
   if (vis > 1) used += n->gap * (vis - 1);
   int extra = avail - used; if (extra < 0) extra = 0;
@@ -1179,7 +1192,9 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
     int cw, ch; swiss_measure(c, &cw, &ch);
     int cm = n->dir ? cw : ch, cc = n->dir ? ch : cw;
     if (c->flex && totflex) cm += extra * c->flex / totflex;
-    int crossSpace = n->dir ? ih : iw;
+    int leadM = n->dir ? c->ml : c->mt, trailM = n->dir ? c->mr : c->mb;   // main-axis margins
+    int leadC = n->dir ? c->mt : c->ml, trailC = n->dir ? c->mb : c->mr;   // cross-axis margins
+    int crossSpace = (n->dir ? ih : iw) - leadC - trailC;                   // cross room after this child's margins
     int hasCross = n->dir ? (c->h >= 0) : (c->w >= 0);  // explicit cross size set?
     int co; // cross-axis offset within crossSpace
     if (c->selfalign) {                                  // self-align overrides parent (margin auto / alignSelf)
@@ -1190,9 +1205,10 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
     else if (n->align == 2) co = crossSpace - cc;
     else co = 0;
     if (co < 0) co = 0;
-    if (n->dir) swiss_arrange(c, cursor, iy + co, cm, cc);
-    else        swiss_arrange(c, ix + co, cursor, cc, cm);
-    cursor += cm + n->gap;
+    cursor += leadM;                                     // leading main margin before placing
+    if (n->dir) swiss_arrange(c, cursor, iy + leadC + co, cm, cc);
+    else        swiss_arrange(c, ix + leadC + co, cursor, cc, cm);
+    cursor += cm + trailM + n->gap;                      // trailing main margin after
   }
 }
 
