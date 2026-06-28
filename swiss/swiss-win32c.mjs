@@ -699,6 +699,16 @@ function emit(ast, opts) {
       if (na.fillcross) out.build.push(`  ${nv}->fillcross = 1;`);
       if (na.mt || na.mb || na.ml || na.mr) out.build.push(`  ${nv}->mt = ${na.mt}; ${nv}->mb = ${na.mb}; ${nv}->ml = ${na.ml}; ${nv}->mr = ${na.mr};`);
     };
+    // control height: explicit height wins; else derive from vertical padding +
+    // font size (the browser/GTK box model — Win32 controls have no CSS padding,
+    // so a 10px-padded 16px input must be sized to ~font+2*pad, not a fixed 24).
+    const leafH = (fallback) => {
+      if (na.h >= 0) return na.h;
+      const padV = st && st.padding != null ? Number(st.padding) : 0;
+      const fs = st && st.fontSize ? Number(st.fontSize) : 0;
+      if (!padV && !fs) return fallback;
+      return (fs || 16) + 2 * padV + 8;
+    };
     const pack = (nodeExpr) => { if (parent) out.build.push(`  swiss_add(${parent}, ${nodeExpr});`); };
     const dyn = planDynVisible; // (handled in buildCond)
 
@@ -766,7 +776,7 @@ function emit(ast, opts) {
         out.build.push(`  ${snip}`); if (!scope.__inrow) cellsIn(a.disabled.expression).forEach((cn) => deps[cn].push(snip));
       }
       applyControl(hw, st, 'btn');
-      const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(hw)};`); selfStep(n); pack(n); return n;
+      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(${hw}, ${na.w}, ${leafH(-1)}, ${na.flex});`); selfStep(n); pack(n); return n;
     }
     if (name === 'Input') {
       const f = vid('ent'); stateFields.push(`  HWND ${f};`);
@@ -793,7 +803,7 @@ function emit(ast, opts) {
         deps[cell.name].push(`{ char* _t = swiss_gettext(s->${f}); if (strcmp(_t, s->${cell.name}) != 0) SetWindowTextA(s->${f}, s->${cell.name}); free(_t); }`);
       }
       applyControl(`s->${f}`, st, 'edit');
-      const nh = na.h < 0 ? 24 : na.h;   // width auto (-1) → fills a stretch parent; measure gives a natural fallback
+      const nh = leafH(24);   // width auto (-1) → fills a stretch parent; height from padding+font
       const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w}, ${nh}, ${na.flex});`); selfStep(n); pack(n); return n;
     }
     if (name === 'TextArea') {
