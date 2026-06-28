@@ -1,0 +1,11 @@
+# ── os_notify: system notifications for Ezy ───────────────────
+# Extension of `os` — `import "os_notify"` brings the os API plus these.
+# Backends: notify-send (linux), AppleScript (macos). Windows toast and
+# mobile (android/ios) are reserved.
+#
+#   import "os_notify"
+#   fn main(): { os_notify("Build", "Compilation finished") }
+
+extern fn os_notify(title: string, body: string) -> int          # 1 ok / 0 fail
+extern fn os_notify_full(title: string, body: string, urgency: string) -> int  # urgency: low|normal|critical (linux)
+extern fn os_notify_version() -> string

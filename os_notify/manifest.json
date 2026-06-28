@@ -1,0 +1,10 @@
+{
+  "name":         "os_notify",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "System notifications (notify-send / AppleScript) — extends os",
+  "sources":      ["os_notify.c"],
+  "header":       "os_notify.ez",
+  "binary":       "libos_notify.so",
+  "extends":      "os"
+}
