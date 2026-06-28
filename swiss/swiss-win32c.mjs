@@ -717,22 +717,23 @@ function emit(ast, opts) {
     }
     if (name === 'Text') {
       const info = textSnippet(el, scope, '');
+      const ssAlign = st && st.textAlign === 'center' ? 'SS_CENTER' : st && st.textAlign === 'right' ? 'SS_RIGHT' : 'SS_LEFT';  // honor JSX textAlign (default left)
       if (info.dynamic) {
         if (scope.__inrow) {
-          const hw = ctl('"STATIC"', 'SS_LEFT', 'NULL', 'text');
+          const hw = ctl('"STATIC"', ssAlign, 'NULL', 'text');
           out.build.push(`  ${textSnippet(el, scope, hw).snippet}`);
           applyControl(hw, st, 'text'); const n = vid('n');
           out.build.push(`  Node* ${n} = ${mkNode(hw)};`); selfStep(n); pack(n); return n;
         }
         const f = vid('lbl'); stateFields.push(`  HWND ${f};`);
-        out.build.push(`  s->${f} = CreateWindowExA(0, "STATIC", NULL, WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 0, 0, 0, g_main, NULL, g_hinst, NULL);`);
+        out.build.push(`  s->${f} = CreateWindowExA(0, "STATIC", NULL, WS_CHILD | WS_VISIBLE | ${ssAlign}, 0, 0, 0, 0, g_main, NULL, g_hinst, NULL);`);
         const real = textSnippet(el, scope, `s->${f}`);
         out.build.push(`  ${real.snippet}`);
         info.reads.forEach((cn) => deps[cn].push(real.snippet));
         applyControl(`s->${f}`, st, 'text');
         const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(`s->${f}`)};`); selfStep(n); pack(n); return n;
       }
-      const hw = ctl('"STATIC"', 'SS_LEFT', cstr(info.staticText), 'text');
+      const hw = ctl('"STATIC"', ssAlign, cstr(info.staticText), 'text');
       applyControl(hw, st, 'text');
       const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(hw)};`); selfStep(n); pack(n); return n;
     }

@@ -706,6 +706,13 @@ function emit(ast, opts) {
     if (st.alignItems && ALIGN[st.alignItems]) out.build.push(`  gtk_widget_set_halign(${v}, ${ALIGN[st.alignItems]});`);
     if (st.justifyContent && ALIGN[st.justifyContent]) out.build.push(`  gtk_widget_set_valign(${v}, ${ALIGN[st.justifyContent]});`);
   }
+  // GtkLabel centers its text by default; honor CSS textAlign (default: left)
+  function labelAlign(target, st) {
+    const ta = st && st.textAlign;
+    const xa = ta === 'center' ? '0.5' : ta === 'right' ? '1.0' : '0.0';
+    out.build.push(`  gtk_widget_set_halign(${target}, GTK_ALIGN_FILL);`);
+    out.build.push(`  gtk_label_set_xalign(GTK_LABEL(${target}), ${xa});`);
+  }
 
   // text children → printf snippet (parts), collects cells read
   function textSnippet(el, scope, targetExpr) {
@@ -801,18 +808,18 @@ function emit(ast, opts) {
         if (scope.__inrow) {  // inside a list/map row → built fresh on each rebuild (no shared state field / dep)
           const f = vid('t'); out.build.push(`  GtkWidget* ${f} = gtk_label_new("");`);
           out.build.push(`  ${textSnippet(el, scope, f).snippet}`);
-          applyStyle(f, st); addClass(f); pack(f); return f;
+          applyStyle(f, st); labelAlign(f, st); addClass(f); pack(f); return f;
         }
         const f = vid('lbl'); stateFields.push(`  GtkWidget* ${f};`);
         out.build.push(`  s->${f} = gtk_label_new("");`);
         const real = textSnippet(el, scope, `s->${f}`);   // snippet bound to the real target
         out.build.push(`  ${real.snippet}`);
         info.reads.forEach((cn) => deps[cn].push(real.snippet));
-        applyStyle(`s->${f}`, st); addClass(`s->${f}`); pack(`s->${f}`); return `s->${f}`;
+        applyStyle(`s->${f}`, st); labelAlign(`s->${f}`, st); addClass(`s->${f}`); pack(`s->${f}`); return `s->${f}`;
       }
       const l = vid('t');
       out.build.push(`  GtkWidget* ${l} = gtk_label_new(${cstr(info.staticText)});`);
-      applyStyle(l, st); addClass(l); pack(l); return l;
+      applyStyle(l, st); labelAlign(l, st); addClass(l); pack(l); return l;
     }
     if (name === 'Button') {
       const b = vid('b');
