@@ -22,6 +22,7 @@
   #include <windows.h>
   #include <commdlg.h>
   #include <shlobj.h>
+  #include <commctrl.h>
 #elif defined(__ANDROID__)
   #define UI_ANDROID 1
 #elif defined(__APPLE__)
@@ -102,6 +103,76 @@ static char *win_input(const char *title, const char *prompt, const char *deflt,
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) { if (!IsDialogMessage(h, &msg)) { TranslateMessage(&msg); DispatchMessage(&msg); } }
     return strdup(win_in_ok ? win_in_buf : "");
+}
+
+/* a listbox chooser */
+static char win_lst_buf[1024]; static int win_lst_ok; static HWND win_lst_lb;
+static LRESULT CALLBACK win_lst_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    if (m == WM_COMMAND) {
+        int id = LOWORD(w);
+        if (id == 1 || (id == 100 && HIWORD(w) == LBN_DBLCLK)) {
+            int sel = (int)SendMessage(win_lst_lb, LB_GETCURSEL, 0, 0);
+            if (sel >= 0) { SendMessage(win_lst_lb, LB_GETTEXT, sel, (LPARAM)win_lst_buf); win_lst_ok = 1; } else win_lst_buf[0] = 0;
+            DestroyWindow(h);
+        } else if (id == 2) { win_lst_ok = 0; DestroyWindow(h); }
+        return 0;
+    }
+    if (m == WM_CLOSE)   { win_lst_ok = 0; DestroyWindow(h); return 0; }
+    if (m == WM_DESTROY) { PostQuitMessage(0); return 0; }
+    return DefWindowProc(h, m, w, l);
+}
+static char *win_list(const char *title, const char *items) {
+    win_lst_ok = 0; win_lst_buf[0] = 0;
+    WNDCLASS wc; memset(&wc, 0, sizeof wc);
+    wc.lpfnWndProc = win_lst_proc; wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = "EzyListWnd"; wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    RegisterClass(&wc);
+    HWND h = CreateWindow("EzyListWnd", title && *title ? title : "Choose",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 320, 300, NULL, NULL, wc.hInstance, NULL);
+    win_lst_lb = CreateWindow("LISTBOX", "", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
+        12, 12, 290, 210, h, (HMENU)100, wc.hInstance, NULL);
+    char *copy = strdup(items ? items : "");
+    for (char *tok = strtok(copy, "\n"); tok; tok = strtok(NULL, "\n")) SendMessage(win_lst_lb, LB_ADDSTRING, 0, (LPARAM)tok);
+    free(copy);
+    CreateWindow("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 140, 235, 75, 26, h, (HMENU)1, wc.hInstance, NULL);
+    CreateWindow("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE, 227, 235, 75, 26, h, (HMENU)2, wc.hInstance, NULL);
+    ShowWindow(h, SW_SHOW);
+    MSG msg; while (GetMessage(&msg, NULL, 0, 0)) { if (!IsDialogMessage(h, &msg)) { TranslateMessage(&msg); DispatchMessage(&msg); } }
+    return strdup(win_lst_ok ? win_lst_buf : "");
+}
+
+/* a date picker (DateTimePicker control) */
+static SYSTEMTIME win_dt_val; static int win_dt_ok; static HWND win_dt_ctl;
+static LRESULT CALLBACK win_dt_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    if (m == WM_COMMAND) {
+        int id = LOWORD(w);
+        if (id == 1) { DateTime_GetSystemtime(win_dt_ctl, &win_dt_val); win_dt_ok = 1; DestroyWindow(h); }
+        else if (id == 2) { win_dt_ok = 0; DestroyWindow(h); }
+        return 0;
+    }
+    if (m == WM_CLOSE)   { win_dt_ok = 0; DestroyWindow(h); return 0; }
+    if (m == WM_DESTROY) { PostQuitMessage(0); return 0; }
+    return DefWindowProc(h, m, w, l);
+}
+static char *win_date(const char *title) {
+    INITCOMMONCONTROLSEX ic; ic.dwSize = sizeof ic; ic.dwICC = ICC_DATE_CLASSES;
+    InitCommonControlsEx(&ic);
+    win_dt_ok = 0;
+    WNDCLASS wc; memset(&wc, 0, sizeof wc);
+    wc.lpfnWndProc = win_dt_proc; wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = "EzyDateWnd"; wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    RegisterClass(&wc);
+    HWND h = CreateWindow("EzyDateWnd", title && *title ? title : "Pick a date",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 300, 130, NULL, NULL, wc.hInstance, NULL);
+    win_dt_ctl = CreateWindow(DATETIMEPICK_CLASS, "", WS_CHILD | WS_VISIBLE | DTS_SHORTDATEFORMAT,
+        12, 16, 260, 26, h, (HMENU)101, wc.hInstance, NULL);
+    CreateWindow("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 120, 60, 75, 26, h, (HMENU)1, wc.hInstance, NULL);
+    CreateWindow("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE, 207, 60, 75, 26, h, (HMENU)2, wc.hInstance, NULL);
+    ShowWindow(h, SW_SHOW);
+    MSG msg; while (GetMessage(&msg, NULL, 0, 0)) { if (!IsDialogMessage(h, &msg)) { TranslateMessage(&msg); DispatchMessage(&msg); } }
+    if (!win_dt_ok) return strdup("");
+    char b[16]; snprintf(b, sizeof b, "%04d-%02d-%02d", win_dt_val.wYear, win_dt_val.wMonth, win_dt_val.wDay);
+    return strdup(b);
 }
 #endif
 
@@ -299,6 +370,8 @@ char *os_ui_pick_date(const char *title) {
     sh_quote(cmd, sizeof cmd, title && *title ? title : "Pick a date");
     strncat(cmd, " 2>/dev/null", sizeof cmd - strlen(cmd) - 1);
     return run_capture(cmd);
+#elif defined(UI_WINDOWS)
+    return win_date(title);
 #else
     (void)title; return strdup("");
 #endif
@@ -332,6 +405,8 @@ char *os_ui_pick_item(const char *title, const char *items) {
     char *r = run_capture(cmd);
     if (!strcmp(r, "false")) { free(r); return strdup(""); }   /* cancelled */
     return r;
+#elif defined(UI_WINDOWS)
+    return win_list(title, items);
 #else
     (void)title; (void)items; return strdup("");
 #endif
@@ -356,4 +431,4 @@ char *os_ui_password(const char *title, const char *prompt) {
 #endif
 }
 
-char *os_ui_version(void) { return strdup("os_ui 1.1.0"); }
+char *os_ui_version(void) { return strdup("os_ui 1.3.0"); }

@@ -49,6 +49,17 @@ static int have(const char *bin) {
 }
 #endif
 
+#if defined(BR_WINDOWS)
+/* run a command, return its trimmed stdout */
+static char *win_capture(const char *cmd) {
+    FILE *p = _popen(cmd, "r"); if (!p) return strdup("");
+    char buf[256]; size_t n = fread(buf, 1, sizeof buf - 1, p); buf[n] = 0;
+    _pclose(p);
+    while (n && (buf[n-1] == '\n' || buf[n-1] == '\r' || buf[n-1] == ' ')) buf[--n] = 0;
+    return strdup(buf);
+}
+#endif
+
 /* current brightness 0-100, or -1 if unavailable */
 long long os_brightness_get(void) {
 #if defined(BR_LINUX)
@@ -57,8 +68,11 @@ long long os_brightness_get(void) {
     snprintf(p, sizeof p, "%s/brightness", dir);     if (!read_ll(p, &cur)) return -1;
     snprintf(p, sizeof p, "%s/max_brightness", dir);  if (!read_ll(p, &max) || max <= 0) return -1;
     return (cur * 100 + max / 2) / max;
+#elif defined(BR_WINDOWS)
+    char *s = win_capture("powershell -NoProfile -Command \"(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness).CurrentBrightness\"");
+    long long v = s[0] ? atoll(s) : -1; free(s); return v;
 #else
-    return -1;   /* macos/windows/mobile: reserved */
+    return -1;   /* macos/mobile: reserved */
 #endif
 }
 
@@ -80,6 +94,11 @@ long long os_brightness_set(long long pct) {
     FILE *f = fopen(p, "w"); if (!f) return 0;          /* needs root without brightnessctl */
     fprintf(f, "%lld", val); int ok = fclose(f) == 0;
     return ok ? 1 : 0;
+#elif defined(BR_WINDOWS)
+    char cmd[256];
+    snprintf(cmd, sizeof cmd,
+        "powershell -NoProfile -Command \"(Get-WmiObject -Namespace root/WMI -Class WmiMonitorBrightnessMethods).WmiSetBrightness(1,%lld)\" >NUL 2>&1", pct);
+    return system(cmd) == 0 ? 1 : 0;
 #else
     (void)pct; return 0;
 #endif
