@@ -1,0 +1,11 @@
+{
+  "name":         "os_screen",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "Screen size and screenshots (xrandr/grim/screencapture/GDI) — extends os",
+  "sources":      ["os_screen.c"],
+  "header":       "os_screen.ez",
+  "binary":       "libos_screen.so",
+  "extends":      "os",
+  "link_flags_windows": ["-lgdi32"]
+}

@@ -1,0 +1,15 @@
+# ── os_screen: screen size + screenshots for Ezy ──────────────
+# Extension of `os`. Backends: xrandr/grim/maim/scrot/import (linux),
+# screencapture (macos), GDI (windows). Mobile reserved.
+#
+#   import "os_screen"
+#   fn main():
+#   {
+#       print(os_screen_width(), "x", os_screen_height())
+#       os_screenshot("/tmp/shot.png")
+#   }
+
+extern fn os_screen_width() -> int
+extern fn os_screen_height() -> int
+extern fn os_screenshot(path: string) -> int   # 1 ok / 0 fail (BMP on Windows)
+extern fn os_screen_version() -> string
