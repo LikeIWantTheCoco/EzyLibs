@@ -540,8 +540,9 @@ function emit(ast, opts) {
       const arg = valName || (arity > 0 ? '0' : '');
       lines.push(`  method_${fn.name}(s${arg ? ', ' + arg : ''});`);
     } else if (fn.type === 'ArrowFunctionExpression') {
-      if (valName && fn.params[0]) lines.push(`  long long ${fn.params[0].name} = ${valName};`);
-      genStmts(fn.body, { ...scope }, lines);
+      const hscope = { ...scope };
+      if (valName && fn.params[0]) { lines.push(`  long long ${fn.params[0].name} = ${valName};`); hscope[fn.params[0].name] = { c: fn.params[0].name, t: 'int' }; }
+      genStmts(fn.body, hscope, lines);   // bind the event-value param so the body can read it
     } else {
       err('handler must be an arrow function or a helper name', fn);
     }
@@ -1250,6 +1251,9 @@ static void swiss_relayout(void) {
   int rx = 0;
   if (rw < W) { if (g_root->selfalign == 1) rx = (W - rw) / 2; else if (g_root->selfalign == 2) rx = W - rw; }
   swiss_arrange(g_root, rx, 0, rw, rh);
+  // repaint the whole client so areas vacated by moved controls are cleared
+  // (otherwise relayout after a state change leaves ghost text behind)
+  InvalidateRect(g_main, NULL, TRUE);
 }
 
 // ── font cache (size 0 = default UI size) ──

@@ -563,8 +563,9 @@ function emit(ast, opts) {
       const arg = valName || (arity > 0 ? '0' : '');   // pass dummy for an (e) event param
       lines.push(`  method_${fn.name}(s${arg ? ', ' + arg : ''});`);
     } else if (fn.type === 'ArrowFunctionExpression') {
-      if (valName && fn.params[0]) lines.push(`  long long ${fn.params[0].name} = ${valName};`);
-      genStmts(fn.body, { ...scope }, lines);
+      const hscope = { ...scope };
+      if (valName && fn.params[0]) { lines.push(`  long long ${fn.params[0].name} = ${valName};`); hscope[fn.params[0].name] = { c: fn.params[0].name, t: 'int' }; }
+      genStmts(fn.body, hscope, lines);   // bind the event-value param so the body can read it
     } else {
       err('handler must be an arrow function or a helper name', fn);
     }
