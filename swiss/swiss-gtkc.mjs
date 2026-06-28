@@ -585,11 +585,14 @@ function emit(ast, opts) {
     const css = [];
     for (const k in st) {
       const v = st[k];
-      if (k === 'padding') css.push(`padding:${v}px`);   // inner padding (not outer margin)
-      // height → min-height (can shrink below the theme default). GTK adds
-      // padding on top, so subtract it to make the TOTAL height ≈ the JSX value
-      // (matching the Win32 target, which treats height as the full size).
-      else if (k === 'height') css.push(`min-height:${Math.max(0, v - 2 * (st.padding || 0) - 2)}px`);
+      // padding is inner spacing (not outer margin). When an explicit height is
+      // set it is authoritative (Win32 total-height model), so drop the vertical
+      // padding — otherwise it inflates the control and a small height looks like
+      // the default; keep horizontal padding for text inset.
+      if (k === 'padding') css.push(st.height != null ? `padding:0px ${v}px` : `padding:${v}px`);
+      // height → min-height: GTK won't shrink below its natural height with
+      // size_request, but min-height can (down to the font's line height).
+      else if (k === 'height') css.push(`min-height:${v}px`);
       else if (k === 'fontSize') css.push(`font-size:${v}px`);
       else if (k === 'fontWeight') css.push(`font-weight:${v}`);
       else if (k === 'color') css.push(`color:${v}`);
