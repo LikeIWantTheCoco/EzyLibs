@@ -579,6 +579,7 @@ function emit(ast, opts) {
       else if (k === 'fontWeight') o.fontWeight = s;
       else if (k === 'color') o.color = s;
       else if (k === 'backgroundColor' || k === 'background') o.backgroundColor = s;
+      else if (k === 'borderRadius') o.borderRadius = num(s);
       else if (k === 'textAlign') o.textAlign = s;
       else if (k === 'flexDirection') o.flexDirection = s;
       else if (k === 'gap') o.gap = num(s);
@@ -637,7 +638,8 @@ function emit(ast, opts) {
     const side = (k) => st && st[k] != null ? Number(st[k]) : m;
     const mt = side('marginTop'), mb = side('marginBottom'), ml = side('marginLeft'), mr = side('marginRight');
     const fillcross = st && (st.fillCross || (st.flex || st.flexGrow)) ? 1 : 0;  // width:100% / flex → fill parent cross-axis
-    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross };
+    const radius = st && st.borderRadius ? Number(st.borderRadius) : 0;
+    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross, radius };
   }
   // apply font + text color to a freshly created control hwnd expr
   function applyControl(hw, st, kind) {
@@ -697,6 +699,7 @@ function emit(ast, opts) {
     const selfStep = (nv) => {
       if (na.selfalign) out.build.push(`  ${nv}->selfalign = ${na.selfalign};`);
       if (na.fillcross) out.build.push(`  ${nv}->fillcross = 1;`);
+      if (na.radius) out.build.push(`  ${nv}->radius = ${na.radius};`);
       if (na.mt || na.mb || na.ml || na.mr) out.build.push(`  ${nv}->mt = ${na.mt}; ${nv}->mb = ${na.mb}; ${nv}->ml = ${na.ml}; ${nv}->mr = ${na.mr};`);
     };
     // control height: explicit height wins; else derive from vertical padding +
@@ -1129,6 +1132,7 @@ typedef struct Node {
   int justify, align;        // main / cross alignment (0 start 1 center 2 end 3 stretch)
   int selfalign;             // self cross-align in parent (0 inherit, 1 center, 2 end) — margin auto / alignSelf
   int fillcross;             // fill parent cross-axis (width:100% / flex) — else content-sized (web inline-block)
+  int radius;                // borderRadius (px) — rounded via a window region
   int mt, mb, ml, mr;        // margins (outer spacing around the node)
   COLORREF bg; int hasbg, visible;
 } Node;
@@ -1187,7 +1191,12 @@ static void swiss_measure(Node* n, int* mw, int* mh) {
 }
 
 static void swiss_arrange(Node* n, int x, int y, int w, int h) {
-  if (n->hwnd) { MoveWindow(n->hwnd, x, y, w, h, TRUE); return; }
+  if (n->hwnd) {
+    MoveWindow(n->hwnd, x, y, w, h, TRUE);
+    if (n->radius > 0)  // borderRadius → clip the control to a rounded rect
+      SetWindowRgn(n->hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, n->radius * 2, n->radius * 2), TRUE);
+    return;
+  }
   int ix = x + n->pad, iy = y + n->pad, iw = w - 2 * n->pad, ih = h - 2 * n->pad;
   int avail = n->dir ? iw : ih;
   int used = 0, vis = 0, totflex = 0;
