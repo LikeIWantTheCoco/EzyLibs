@@ -1,0 +1,11 @@
+{
+  "name":         "os_ui",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "Native desktop dialogs (file picker, message, confirm, input) — extends os",
+  "sources":      ["os_ui.c"],
+  "header":       "os_ui.ez",
+  "binary":       "libos_ui.so",
+  "extends":      "os",
+  "link_flags_windows": ["-lcomdlg32", "-lshell32", "-lole32"]
+}

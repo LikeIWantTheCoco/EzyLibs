@@ -1,0 +1,20 @@
+# ── os_ui: native desktop dialogs for Ezy ─────────────────────
+# Extension of the `os` lib — `import "os_ui"` brings the whole os API
+# plus these dialogs. Desktop backends: zenity (linux), AppleScript
+# (macos), Win32 (windows). Mobile (android/ios) is reserved.
+#
+#   import "os_ui"
+#   fn main():
+#   {
+#       path = os_ui_open_file("Pick an image", "*.png *.jpg")
+#       if path.len() > 0: { print("chose:", path) }
+#       if os_ui_confirm("Quit?", "Really exit?") == 1: { print("bye") }
+#   }
+
+extern fn os_ui_open_file(title: string, filter: string) -> string   # "" if cancelled
+extern fn os_ui_save_file(title: string, default_name: string) -> string
+extern fn os_ui_pick_folder(title: string) -> string
+extern fn os_ui_message(title: string, text: string) -> int          # info alert -> 1
+extern fn os_ui_confirm(title: string, text: string) -> int          # yes=1 / no=0
+extern fn os_ui_input(title: string, prompt: string, deflt: string) -> string
+extern fn os_ui_version() -> string

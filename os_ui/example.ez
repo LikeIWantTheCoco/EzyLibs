@@ -1,0 +1,24 @@
+import "os_ui"
+
+fn main():
+{
+    print("version:", os_ui_version())
+
+    # os_ui extends os, so the whole os API is here too:
+    print("on:", os_platform())
+
+    path = os_ui_open_file("Pick a file", "")
+    if path.len() > 0:
+    {
+        print("you chose:", path)
+        print("size:", os_filesize(path), "bytes")   # os.* available via extends
+    }
+    else:
+    {
+        print("cancelled")
+    }
+
+    name = os_ui_input("Name", "What's your name?", "")
+    if name.len() > 0: { os_ui_message("Hello", "Hi, " + name + "!") }
+    return 0
+}
