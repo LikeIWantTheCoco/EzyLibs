@@ -1,0 +1,14 @@
+# ── os_clipboard: system clipboard for Ezy ────────────────────
+# Extension of `os`. Backends: wl-copy/xclip/xsel (linux), pbcopy/pbpaste
+# (macos), Win32 (windows). Mobile reserved.
+#
+#   import "os_clipboard"
+#   fn main():
+#   {
+#       os_clip_set("hello")
+#       print(os_clip_get())
+#   }
+
+extern fn os_clip_set(text: string) -> int    # 1 ok / 0 fail
+extern fn os_clip_get() -> string             # "" if empty/unavailable
+extern fn os_clip_version() -> string

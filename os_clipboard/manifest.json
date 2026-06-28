@@ -1,0 +1,10 @@
+{
+  "name":         "os_clipboard",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "System clipboard read/write (xclip/pbcopy/Win32) — extends os",
+  "sources":      ["os_clipboard.c"],
+  "header":       "os_clipboard.ez",
+  "binary":       "libos_clipboard.so",
+  "extends":      "os"
+}
