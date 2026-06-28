@@ -708,18 +708,20 @@ function emit(ast, opts) {
   }
   // GtkLabel centers its text by default; honor CSS textAlign (default: left).
   // halign START → content-sized & left (web-like), unless it should fill.
+  // (an explicit px width is an exact size via size_request, NOT a fill.)
   function labelAlign(target, st) {
     const ta = st && st.textAlign;
-    const fill = st && (st.fillCross || st.width != null || st.flex);
+    const fill = st && (st.fillCross || st.flex);
     const ha = ta === 'center' ? 'GTK_ALIGN_CENTER' : ta === 'right' ? 'GTK_ALIGN_END' : fill ? 'GTK_ALIGN_FILL' : 'GTK_ALIGN_START';
     const xa = ta === 'center' ? '0.5' : ta === 'right' ? '1.0' : '0.0';
     out.build.push(`  gtk_widget_set_halign(${target}, ${ha});`);
     out.build.push(`  gtk_label_set_xalign(GTK_LABEL(${target}), ${xa});`);
   }
   // leaf controls (button/entry/…) are content-sized by default (web inline-
-  // block); fill the cross-axis only on width:100% / explicit width / flex.
+  // block); fill the cross-axis only on width:100% / flex. An explicit px width
+  // is an exact size (size_request) at the start, not a fill.
   function crossFill(target, st) {
-    const fill = st && (st.fillCross || st.width != null || st.flex);
+    const fill = st && (st.fillCross || st.flex);
     out.build.push(`  gtk_widget_set_halign(${target}, ${fill ? 'GTK_ALIGN_FILL' : 'GTK_ALIGN_START'});`);
   }
 
