@@ -316,7 +316,12 @@ host_os() {
 collect_ezylib_flags() {
   target="$1"; host="$2"
   ezylib_flags=""
-  for lib in $(grep -oE '^[[:space:]]*import[[:space:]]+"[^"]+"' backend/*.ez 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' | sort -u); do
+  # only scan the files actually compiled: backend/main.ez, plus the swiss-native
+  # facade IFF main imports it (it's always copied into backend/, but its os
+  # imports only apply when used).
+  scan="backend/main.ez"
+  grep -qE '^[[:space:]]*import[[:space:]]+"swiss-native' backend/main.ez 2>/dev/null && scan="$scan backend/swiss-native.ez"
+  for lib in $(grep -hoE '^[[:space:]]*import[[:space:]]+"[^"]+"' $scan 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' | sort -u); do
     libdir="$HOME/.ezy/libs/$lib"
     [ -f "$libdir/lib$lib.so" ] || continue
     if [ "$target" != "$host" ]; then
@@ -415,17 +420,7 @@ build_desktop() {
 
   # link flags for any EzyLibs the backend imports (e.g. sqlite). Native target
   # only — these are ELF .so and don't cross-compile.
-  ezylib_flags=""
-  for lib in $(grep -oE '^[[:space:]]*import[[:space:]]+"[^"]+"' backend/*.ez 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' | sort -u); do
-    libdir="$HOME/.ezy/libs/$lib"
-    [ -f "$libdir/lib$lib.so" ] || continue
-    if [ "$target" != "$host" ]; then
-      die "backend imports EzyLib '$lib' (native .so) — can't cross-compile to $target. Build for the host OS, or use a target-native lib."
-    fi
-    extra=$(sed -n 's/.*"link_flags":[[:space:]]*\[\([^]]*\)\].*/\1/p' "$libdir/manifest.json" 2>/dev/null | tr ',' ' ' | tr -d '"')
-    ezylib_flags="$ezylib_flags -L$libdir -l$lib -Wl,-rpath,$libdir $extra"
-    echo "swiss: linking EzyLib '$lib'"
-  done
+  collect_ezylib_flags "$target" "$host"
 
   # 2) frontend: React/JSX → GTK C (the Swiss translator; build-time Node only)
   echo "swiss: translating React → GTK C"

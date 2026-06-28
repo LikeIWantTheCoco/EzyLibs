@@ -72,6 +72,15 @@ function findComponent(ast) {
     if (n.type === 'ExportDefaultDeclaration') {
       const d = n.declaration;
       if (d.type === 'FunctionDeclaration' || d.type === 'ArrowFunctionExpression' || d.type === 'FunctionExpression') return d;
+      // `export default Name;` → resolve the identifier to its declaration
+      if (d.type === 'Identifier') {
+        for (const m of ast.program.body) {
+          if (m.type === 'FunctionDeclaration' && m.id && m.id.name === d.name) return m;
+          if (m.type === 'VariableDeclaration')
+            for (const v of m.declarations)
+              if (v.id.name === d.name && v.init && (v.init.type === 'ArrowFunctionExpression' || v.init.type === 'FunctionExpression')) return v.init;
+        }
+      }
     }
   err('no default-exported function component found');
 }
@@ -303,6 +312,16 @@ function emit(ast, opts) {
           const a = cexpr(node.arguments[0], scope);
           return { c: `swiss_aprintf("%lld", (long long)(${a.c}))`, t: 'string' };
         }
+        // browser globals: alert/confirm (bare) → MessageBox; console.* → no-op
+        if (c.type === 'Identifier' && c.name === 'alert') {
+          const a = node.arguments[0] ? cexpr(node.arguments[0], scope) : { c: '""' };
+          return { c: `swiss_alert(${a.t === 'string' ? a.c : `swiss_aprintf("%lld", (long long)(${a.c}))`})`, t: 'void' };
+        }
+        if (c.type === 'Identifier' && c.name === 'confirm') {
+          const a = node.arguments[0] ? cexpr(node.arguments[0], scope).c : '""';
+          return { c: `swiss_confirm(${a})`, t: 'bool' };
+        }
+        if (c.type === 'MemberExpression' && c.object.name === 'console') return { c: '((void)0)', t: 'void' };
         if (c.type === 'MemberExpression' && c.object.name === 'Math') {
           const A = node.arguments.map((x) => cexpr(x, scope).c);
           const m = c.property.name;
@@ -710,10 +729,13 @@ function emit(ast, opts) {
       else if (a.title && a.title.type === 'JSXExpressionContainer') { if (a.title.expression.type === 'StringLiteral') label = a.title.expression.value; else dynTitle = a.title.expression; }
       else if (!a.title) label = el.children.filter((c) => c.type === 'JSXText').map((c) => c.value.trim()).filter(Boolean).join(' ');
       let press = a.onPress || a.onClick;
-      if (!press && strAttr(a.type) === 'submit' && scope.__form) press = scope.__form;
+      const isSubmit = strAttr(a.type) === 'submit' && scope.__form;
+      if (!press && isSubmit) press = scope.__form;
       const id = press ? command(emitHandler(press, scope, 'click'), 'BN_CLICKED') : 0;
       const hw = vid('w');
-      out.build.push(`  HWND ${hw} = CreateWindowExA(0, "BUTTON", ${cstr(label)}, WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
+      // a submit button is the form's default → Enter triggers it (IsDialogMessage)
+      const bstyle = isSubmit ? 'BS_DEFPUSHBUTTON' : 'BS_PUSHBUTTON';
+      out.build.push(`  HWND ${hw} = CreateWindowExA(0, "BUTTON", ${cstr(label)}, WS_CHILD | WS_VISIBLE | ${bstyle} | WS_TABSTOP, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
       if (scope.__index) out.build.push(`  SetWindowLongPtrA(${hw}, GWLP_USERDATA, (LONG_PTR)${scope.__index.c});`);
       if (dynTitle) {
         const tv = cexpr(dynTitle, scope);
