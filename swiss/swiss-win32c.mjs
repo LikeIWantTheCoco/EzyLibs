@@ -571,7 +571,7 @@ function emit(ast, opts) {
       else if (k === 'marginLeft') o.marginLeft = num(s);
       else if (k === 'marginRight') o.marginRight = num(s);
       else if (k === 'alignSelf') o.alignSelf = s;
-      else if (k === 'width') { if (s === '100%') { /* fill cross-axis (stretch handles it) */ } else o.width = num(s); }
+      else if (k === 'width') { if (s === '100%') o.fillCross = true; else o.width = num(s); }
       else if (k === 'maxWidth' || k === 'minWidth') o.width = num(s);
       else if (k === 'height' || k === 'maxHeight' || k === 'minHeight') o.height = num(s);
       else if (k === 'flex' || k === 'flexGrow') o.flex = num(s);
@@ -636,7 +636,8 @@ function emit(ast, opts) {
     const m = Number((st && st.margin) || 0);
     const side = (k) => st && st[k] != null ? Number(st[k]) : m;
     const mt = side('marginTop'), mb = side('marginBottom'), ml = side('marginLeft'), mr = side('marginRight');
-    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr };
+    const fillcross = st && (st.fillCross || (st.flex || st.flexGrow)) ? 1 : 0;  // width:100% / flex → fill parent cross-axis
+    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross };
   }
   // apply font + text color to a freshly created control hwnd expr
   function applyControl(hw, st, kind) {
@@ -695,6 +696,7 @@ function emit(ast, opts) {
     const mkNode = (hw) => `swiss_leaf(${hw}, ${na.w}, ${na.h}, ${na.flex})`;
     const selfStep = (nv) => {
       if (na.selfalign) out.build.push(`  ${nv}->selfalign = ${na.selfalign};`);
+      if (na.fillcross) out.build.push(`  ${nv}->fillcross = 1;`);
       if (na.mt || na.mb || na.ml || na.mr) out.build.push(`  ${nv}->mt = ${na.mt}; ${nv}->mb = ${na.mb}; ${nv}->ml = ${na.ml}; ${nv}->mr = ${na.mr};`);
     };
     const pack = (nodeExpr) => { if (parent) out.build.push(`  swiss_add(${parent}, ${nodeExpr});`); };
@@ -1116,6 +1118,7 @@ typedef struct Node {
   int w, h, flex;            // requested size (-1 auto) + main-axis grow factor
   int justify, align;        // main / cross alignment (0 start 1 center 2 end 3 stretch)
   int selfalign;             // self cross-align in parent (0 inherit, 1 center, 2 end) — margin auto / alignSelf
+  int fillcross;             // fill parent cross-axis (width:100% / flex) — else content-sized (web inline-block)
   int mt, mb, ml, mr;        // margins (outer spacing around the node)
   COLORREF bg; int hasbg, visible;
 } Node;
@@ -1197,10 +1200,15 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
     int leadC = n->dir ? c->mt : c->ml, trailC = n->dir ? c->mb : c->mr;   // cross-axis margins
     int crossSpace = (n->dir ? ih : iw) - leadC - trailC;                   // cross room after this child's margins
     int hasCross = n->dir ? (c->h >= 0) : (c->w >= 0);  // explicit cross size set?
+    int isLeaf = (c->hwnd != NULL);
+    // fill the cross axis only if asked (fillcross / width:100% / flex) or a
+    // container under a stretch parent (block-like); leaves are content-sized
+    // by default (web inline-block), aligned to the start.
+    int doStretch = !hasCross && (c->fillcross || (!isLeaf && (c->align == 3 || n->align == 3)));
     int co; // cross-axis offset within crossSpace
     if (c->selfalign) {                                  // self-align overrides parent (margin auto / alignSelf)
       co = c->selfalign == 1 ? (crossSpace - cc) / 2 : crossSpace - cc;
-    } else if (!hasCross && (c->align == 3 || n->align == 3)) {  // stretch only if no explicit cross size
+    } else if (doStretch) {
       cc = crossSpace; co = 0;
     } else if (n->align == 1) co = (crossSpace - cc) / 2;
     else if (n->align == 2) co = crossSpace - cc;

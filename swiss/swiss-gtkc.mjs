@@ -618,7 +618,7 @@ function emit(ast, opts) {
       else if (k === 'marginBottom') o.marginBottom = num(s);
       else if (k === 'marginLeft') o.marginLeft = num(s);
       else if (k === 'marginRight') o.marginRight = num(s);
-      else if (k === 'width') { if (s === '100%') o.flex = 1; else o.width = num(s); }
+      else if (k === 'width') { if (s === '100%') o.fillCross = true; else o.width = num(s); }
       else if (k === 'maxWidth' || k === 'minWidth') o.width = num(s);
       else if (k === 'height' || k === 'maxHeight' || k === 'minHeight') o.height = num(s);
       else if (k === 'fontSize') o.fontSize = num(s);
@@ -706,12 +706,21 @@ function emit(ast, opts) {
     if (st.alignItems && ALIGN[st.alignItems]) out.build.push(`  gtk_widget_set_halign(${v}, ${ALIGN[st.alignItems]});`);
     if (st.justifyContent && ALIGN[st.justifyContent]) out.build.push(`  gtk_widget_set_valign(${v}, ${ALIGN[st.justifyContent]});`);
   }
-  // GtkLabel centers its text by default; honor CSS textAlign (default: left)
+  // GtkLabel centers its text by default; honor CSS textAlign (default: left).
+  // halign START → content-sized & left (web-like), unless it should fill.
   function labelAlign(target, st) {
     const ta = st && st.textAlign;
+    const fill = st && (st.fillCross || st.width != null || st.flex);
+    const ha = ta === 'center' ? 'GTK_ALIGN_CENTER' : ta === 'right' ? 'GTK_ALIGN_END' : fill ? 'GTK_ALIGN_FILL' : 'GTK_ALIGN_START';
     const xa = ta === 'center' ? '0.5' : ta === 'right' ? '1.0' : '0.0';
-    out.build.push(`  gtk_widget_set_halign(${target}, GTK_ALIGN_FILL);`);
+    out.build.push(`  gtk_widget_set_halign(${target}, ${ha});`);
     out.build.push(`  gtk_label_set_xalign(GTK_LABEL(${target}), ${xa});`);
+  }
+  // leaf controls (button/entry/…) are content-sized by default (web inline-
+  // block); fill the cross-axis only on width:100% / explicit width / flex.
+  function crossFill(target, st) {
+    const fill = st && (st.fillCross || st.width != null || st.flex);
+    out.build.push(`  gtk_widget_set_halign(${target}, ${fill ? 'GTK_ALIGN_FILL' : 'GTK_ALIGN_START'});`);
   }
 
   // text children → printf snippet (parts), collects cells read
@@ -848,7 +857,7 @@ function emit(ast, opts) {
         const snip = `gtk_widget_set_sensitive(GTK_WIDGET(${bw}), !(${cexpr(a.disabled.expression, scope).c}));`;
         out.build.push(`  ${snip}`); cellsIn(a.disabled.expression).forEach((cn) => deps[cn].push(snip));
       }
-      applyStyle(b, st); pack(b); return b;
+      applyStyle(b, st); crossFill(b, st); pack(b); return b;
     }
     if (name === 'Input') {
       const f = vid('ent'); stateFields.push(`  GtkWidget* ${f};`);
@@ -877,7 +886,7 @@ function emit(ast, opts) {
       }
       const sub = a.onSubmit || scope.__form;   // explicit onSubmit, or enclosing <form>
       if (sub) out.build.push(`  g_signal_connect(s->${f}, "activate", G_CALLBACK(${emitHandler(sub, scope, 'click')}), s);`);
-      applyStyle(`s->${f}`, st); addClass(`s->${f}`); pack(`s->${f}`); return `s->${f}`;
+      applyStyle(`s->${f}`, st); crossFill(`s->${f}`, st); addClass(`s->${f}`); pack(`s->${f}`); return `s->${f}`;
     }
     if (name === 'Switch') {
       const sw = vid('sw'); stateFields.push(`  GtkWidget* ${sw};`);
