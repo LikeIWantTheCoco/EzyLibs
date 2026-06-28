@@ -1,0 +1,9 @@
+# ── os_brightness: screen backlight (extends os) ──────────────
+# linux only for now (sysfs; set needs brightnessctl or root). macos/windows
+# reserved.
+#   import "os_brightness"
+#   fn main(): { print(os_brightness_get(), "%") }
+
+extern fn os_brightness_get() -> int        # 0-100, -1 if unavailable
+extern fn os_brightness_set(pct: int) -> int
+extern fn os_brightness_version() -> string
