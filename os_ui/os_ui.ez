@@ -17,4 +17,8 @@ extern fn os_ui_pick_folder(title: string) -> string
 extern fn os_ui_message(title: string, text: string) -> int          # info alert -> 1
 extern fn os_ui_confirm(title: string, text: string) -> int          # yes=1 / no=0
 extern fn os_ui_input(title: string, prompt: string, deflt: string) -> string
+extern fn os_ui_pick_color(title: string) -> string        # "#rrggbb" ("" cancel)
+extern fn os_ui_pick_date(title: string) -> string         # "YYYY-MM-DD"
+extern fn os_ui_pick_item(title: string, items: string) -> string  # items newline-separated
+extern fn os_ui_password(title: string, prompt: string) -> string
 extern fn os_ui_version() -> string

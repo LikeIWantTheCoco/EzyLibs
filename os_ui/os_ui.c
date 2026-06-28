@@ -215,4 +215,84 @@ char *os_ui_input(const char *title, const char *prompt, const char *deflt) {
 #endif
 }
 
-char *os_ui_version(void) { return strdup("os_ui 1.0.0"); }
+/* ════════════════════════ color / date / list / password ════════════════════════ */
+/* pick a color → "#rrggbb" ("" if cancelled) */
+char *os_ui_pick_color(const char *title) {
+#if defined(UI_LINUX)
+    char cmd[1024] = "zenity --color-selection --title=";
+    sh_quote(cmd, sizeof cmd, title && *title ? title : "Pick a color");
+    strncat(cmd, " 2>/dev/null", sizeof cmd - strlen(cmd) - 1);
+    char *s = run_capture(cmd);
+    if (!s[0]) return s;
+    int r = 0, g = 0, b = 0;                 /* zenity returns rgb(r,g,b) or rgba(...) */
+    if (sscanf(s, "rgb(%d,%d,%d", &r, &g, &b) >= 3 || sscanf(s, "rgba(%d,%d,%d", &r, &g, &b) >= 3) {
+        free(s); char *hex = malloc(8); snprintf(hex, 8, "#%02x%02x%02x", r & 255, g & 255, b & 255); return hex;
+    }
+    return s;   /* already #hex or other form */
+#else
+    (void)title; return strdup("");   /* macos/windows/mobile: reserved */
+#endif
+}
+/* pick a date → "YYYY-MM-DD" ("" if cancelled) */
+char *os_ui_pick_date(const char *title) {
+#if defined(UI_LINUX)
+    char cmd[1024] = "zenity --calendar --date-format=%Y-%m-%d --title=";
+    sh_quote(cmd, sizeof cmd, title && *title ? title : "Pick a date");
+    strncat(cmd, " 2>/dev/null", sizeof cmd - strlen(cmd) - 1);
+    return run_capture(cmd);
+#else
+    (void)title; return strdup("");
+#endif
+}
+/* choose one of `items` (newline-separated) → the chosen item ("" if cancelled) */
+char *os_ui_pick_item(const char *title, const char *items) {
+#if defined(UI_LINUX)
+    char cmd[4096] = "zenity --list --hide-header --column= --title=";
+    sh_quote(cmd, sizeof cmd, title && *title ? title : "Choose");
+    char *copy = strdup(items ? items : "");
+    for (char *tok = strtok(copy, "\n"); tok; tok = strtok(NULL, "\n")) {
+        strncat(cmd, " ", sizeof cmd - strlen(cmd) - 1);
+        sh_quote(cmd, sizeof cmd, tok);
+    }
+    free(copy);
+    strncat(cmd, " 2>/dev/null", sizeof cmd - strlen(cmd) - 1);
+    return run_capture(cmd);
+#elif defined(UI_MACOS)
+    char list[3072] = ""; char *copy = strdup(items ? items : ""); int first = 1;
+    for (char *tok = strtok(copy, "\n"); tok; tok = strtok(NULL, "\n")) {
+        if (!first) strncat(list, ",", sizeof list - strlen(list) - 1);
+        strncat(list, "\"", sizeof list - strlen(list) - 1);
+        strncat(list, tok, sizeof list - strlen(list) - 1);
+        strncat(list, "\"", sizeof list - strlen(list) - 1);
+        first = 0;
+    }
+    free(copy);
+    char cmd[4096];
+    snprintf(cmd, sizeof cmd, "osascript -e 'choose from list {%s} with prompt \"%s\"' 2>/dev/null",
+             list, title && *title ? title : "Choose");
+    char *r = run_capture(cmd);
+    if (!strcmp(r, "false")) { free(r); return strdup(""); }   /* cancelled */
+    return r;
+#else
+    (void)title; (void)items; return strdup("");
+#endif
+}
+/* password entry (hidden input) → the text ("" if cancelled) */
+char *os_ui_password(const char *title, const char *prompt) {
+#if defined(UI_LINUX)
+    char cmd[1024] = "zenity --password --title=";
+    sh_quote(cmd, sizeof cmd, title && *title ? title : (prompt ? prompt : "Password"));
+    strncat(cmd, " 2>/dev/null", sizeof cmd - strlen(cmd) - 1);
+    return run_capture(cmd);
+#elif defined(UI_MACOS)
+    char cmd[2048];
+    snprintf(cmd, sizeof cmd,
+        "osascript -e 'text returned of (display dialog \"%s\" with title \"%s\" default answer \"\" with hidden answer)' 2>/dev/null",
+        prompt ? prompt : "Password:", title && *title ? title : "Password");
+    return run_capture(cmd);
+#else
+    (void)title; (void)prompt; return strdup("");
+#endif
+}
+
+char *os_ui_version(void) { return strdup("os_ui 1.1.0"); }
