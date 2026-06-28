@@ -1,0 +1,11 @@
+# ── os_session: idle time + screen lock (extends os) ──────────
+#   import "os_session"
+#   fn main():
+#   {
+#       print("idle ms:", os_idle_ms())
+#       # os_lock()   # locks the screen
+#   }
+
+extern fn os_idle_ms() -> int       # ms since last input, -1 unknown
+extern fn os_lock() -> int          # lock the screen -> 1 ok / 0 fail
+extern fn os_session_version() -> string
