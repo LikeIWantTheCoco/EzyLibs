@@ -65,6 +65,15 @@ function findComponent(ast) {
     if (n.type === 'ExportDefaultDeclaration') {
       const d = n.declaration;
       if (d.type === 'FunctionDeclaration' || d.type === 'ArrowFunctionExpression' || d.type === 'FunctionExpression') return d;
+      // `export default Name;` → resolve the identifier to its declaration
+      if (d.type === 'Identifier') {
+        for (const m of ast.program.body) {
+          if (m.type === 'FunctionDeclaration' && m.id && m.id.name === d.name) return m;
+          if (m.type === 'VariableDeclaration')
+            for (const v of m.declarations)
+              if (v.id.name === d.name && v.init && (v.init.type === 'ArrowFunctionExpression' || v.init.type === 'FunctionExpression')) return v.init;
+        }
+      }
     }
   err('no default-exported function component found');
 }
@@ -310,6 +319,16 @@ function emit(ast, opts) {
           const a = cexpr(node.arguments[0], scope);
           return { c: `g_strdup_printf("%lld", (long long)(${a.c}))`, t: 'string' };
         }
+        // browser globals: alert/confirm (bare) → dialog; console.* → no-op
+        if (c.type === 'Identifier' && c.name === 'alert') {
+          const a = node.arguments[0] ? cexpr(node.arguments[0], scope) : { c: '""' };
+          return { c: `swiss_alert(${a.t === 'string' ? a.c : `g_strdup_printf("%lld", (long long)(${a.c}))`})`, t: 'void' };
+        }
+        if (c.type === 'Identifier' && c.name === 'confirm') {
+          const a = node.arguments[0] ? cexpr(node.arguments[0], scope).c : '""';
+          return { c: `swiss_confirm(${a})`, t: 'bool' };
+        }
+        if (c.type === 'MemberExpression' && c.object.name === 'console') return { c: '((void)0)', t: 'void' };
         // Math.*
         if (c.type === 'MemberExpression' && c.object.name === 'Math') {
           const A = node.arguments.map((x) => cexpr(x, scope).c);
@@ -497,8 +516,10 @@ function emit(ast, opts) {
       return;
     }
     if (arg.type === 'CallExpression' && arg.callee.type === 'MemberExpression' && arg.callee.property.name === 'filter') {
-      const it = arg.arguments[0].params[0].name;
-      const rs = { ...scope }; rs[it] = { rec: `s->${cell.name}.data[_i]`, shape: cell.fields };
+      const fp = arg.arguments[0].params;
+      const rs = { ...scope };
+      if (fp[0] && fp[0].name !== '_') rs[fp[0].name] = { rec: `s->${cell.name}.data[_i]`, shape: cell.fields };
+      if (fp[1]) rs[fp[1].name] = { c: '_i', t: 'int' };   // (item, index) => …
       const pred = cexpr(stripParens(arg.arguments[0].body), rs).c;
       lines.push(`  { long long _w = 0; for (long long _i = 0; _i < s->${cell.name}.len; _i++) { if (${pred}) s->${cell.name}.data[_w++] = s->${cell.name}.data[_i]; } s->${cell.name}.len = _w; }`);
       return;
