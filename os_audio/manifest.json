@@ -6,5 +6,6 @@
   "sources":      ["os_audio.c"],
   "header":       "os_audio.ez",
   "binary":       "libos_audio.so",
-  "extends":      "os"
+  "extends":      "os",
+  "link_flags_windows": ["-lole32"]
 }

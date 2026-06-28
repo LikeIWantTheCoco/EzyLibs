@@ -28,6 +28,25 @@
   #define AU_LINUX 1
 #endif
 
+#ifdef AU_WINDOWS
+#define COBJMACROS
+#include <initguid.h>
+#include <mmdeviceapi.h>
+#include <endpointvolume.h>
+/* default render endpoint's volume control, or NULL (caller releases + CoUninitialize) */
+static IAudioEndpointVolume *au_endpoint(void) {
+    IMMDeviceEnumerator *en = NULL; IMMDevice *dev = NULL; IAudioEndpointVolume *vol = NULL;
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    if (FAILED(CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL,
+                                &IID_IMMDeviceEnumerator, (void **)&en))) return NULL;
+    if (SUCCEEDED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(en, eRender, eConsole, &dev)))
+        IMMDevice_Activate(dev, &IID_IAudioEndpointVolume, CLSCTX_ALL, NULL, (void **)&vol);
+    if (dev) IMMDevice_Release(dev);
+    IMMDeviceEnumerator_Release(en);
+    return vol;
+}
+#endif
+
 #if defined(AU_LINUX) || defined(AU_MACOS)
 static int have(const char *bin) {
     char c[128]; snprintf(c, sizeof c, "command -v %s >/dev/null 2>&1", bin);
@@ -60,8 +79,14 @@ long long os_volume_get(void) {
 #elif defined(AU_MACOS)
     char *s = run_capture("osascript -e 'output volume of (get volume settings)' 2>/dev/null");
     long long v = s[0] ? atoll(s) : -1; free(s); return v;
+#elif defined(AU_WINDOWS)
+    IAudioEndpointVolume *vol = au_endpoint(); if (!vol) { CoUninitialize(); return -1; }
+    float f = 0; long long v = -1;
+    if (SUCCEEDED(IAudioEndpointVolume_GetMasterVolumeLevelScalar(vol, &f))) v = (long long)(f * 100 + 0.5f);
+    IAudioEndpointVolume_Release(vol); CoUninitialize();
+    return v;
 #else
-    return -1;   /* windows/mobile: reserved */
+    return -1;   /* mobile: reserved */
 #endif
 }
 
@@ -77,6 +102,11 @@ long long os_volume_set(long long pct) {
 #elif defined(AU_MACOS)
     char cmd[128]; snprintf(cmd, sizeof cmd, "osascript -e 'set volume output volume %lld' >/dev/null 2>&1", pct);
     return system(cmd) == 0 ? 1 : 0;
+#elif defined(AU_WINDOWS)
+    IAudioEndpointVolume *vol = au_endpoint(); if (!vol) { CoUninitialize(); return 0; }
+    HRESULT hr = IAudioEndpointVolume_SetMasterVolumeLevelScalar(vol, (float)pct / 100.0f, NULL);
+    IAudioEndpointVolume_Release(vol); CoUninitialize();
+    return SUCCEEDED(hr) ? 1 : 0;
 #else
     return 0;
 #endif
@@ -92,6 +122,11 @@ long long os_volume_mute(long long on) {
 #elif defined(AU_MACOS)
     char cmd[128]; snprintf(cmd, sizeof cmd, "osascript -e 'set volume output muted %s' >/dev/null 2>&1", on?"true":"false");
     return system(cmd) == 0 ? 1 : 0;
+#elif defined(AU_WINDOWS)
+    IAudioEndpointVolume *vol = au_endpoint(); if (!vol) { CoUninitialize(); return 0; }
+    HRESULT hr = IAudioEndpointVolume_SetMute(vol, on ? TRUE : FALSE, NULL);
+    IAudioEndpointVolume_Release(vol); CoUninitialize();
+    return SUCCEEDED(hr) ? 1 : 0;
 #else
     (void)on; return 0;
 #endif
@@ -108,6 +143,12 @@ long long os_is_muted(void) {
 #elif defined(AU_MACOS)
     char *s = run_capture("osascript -e 'output muted of (get volume settings)' 2>/dev/null");
     int m = strstr(s, "true") ? 1 : (strstr(s, "false") ? 0 : -1); free(s); return m;
+#elif defined(AU_WINDOWS)
+    IAudioEndpointVolume *vol = au_endpoint(); if (!vol) { CoUninitialize(); return -1; }
+    BOOL mute = FALSE; long long m = -1;
+    if (SUCCEEDED(IAudioEndpointVolume_GetMute(vol, &mute))) m = mute ? 1 : 0;
+    IAudioEndpointVolume_Release(vol); CoUninitialize();
+    return m;
 #else
     return -1;
 #endif
