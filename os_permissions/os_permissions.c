@@ -52,6 +52,17 @@ void os_android_set_context(void *env_, void *ctx) {
     if (g_ctx) { (*env)->DeleteGlobalRef(env, g_ctx); g_ctx = NULL; }
     if (ctx)   g_ctx = (*env)->NewGlobalRef(env, (jobject)ctx);
 }
+
+/* Java-callable bridge so the host wires the Context with one line of Kotlin/Java:
+     package org.ezylang.os
+     object Bridge { external fun setContext(activity: Any) }
+     // after System.loadLibrary("os_permissions"):
+     Bridge.setContext(this)            // `this` = your Activity
+*/
+JNIEXPORT void JNICALL Java_org_ezylang_os_Bridge_setContext(JNIEnv *env, jclass clazz, jobject activity) {
+    (void)clazz;
+    os_android_set_context(env, activity);
+}
 /* exported for sibling libs (os_gps, …) to reuse the bridge */
 void    *os_android_get_context(void) { return g_ctx; }
 JavaVM  *os_android_get_vm(void)      { return g_vm; }

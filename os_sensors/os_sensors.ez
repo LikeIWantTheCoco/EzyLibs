@@ -19,4 +19,6 @@ extern fn os_accel_z() -> float
 extern fn os_gyro_x() -> float       # rad/s
 extern fn os_gyro_y() -> float
 extern fn os_gyro_z() -> float
+extern fn os_steps() -> int          # cumulative steps since boot, -1 if N/A
+                                     # (needs os_perm_request("activity") on Android 10+)
 extern fn os_sensors_version() -> string

@@ -36,9 +36,14 @@
 #include <android/looper.h>
 static ASensorManager   *g_mgr = NULL;
 static ASensorEventQueue *g_q   = NULL;
-static const ASensor *g_accel = NULL, *g_gyro = NULL;
+static const ASensor *g_accel = NULL, *g_gyro = NULL, *g_step = NULL;
 static double g_ax, g_ay, g_az, g_gx, g_gy, g_gz;
+static long long g_steps = -1;
 static int g_inited = 0;
+
+#ifndef ASENSOR_TYPE_STEP_COUNTER
+#define ASENSOR_TYPE_STEP_COUNTER 19
+#endif
 
 static int sn_init(void) {
     if (g_inited) return g_mgr != NULL;
@@ -53,8 +58,10 @@ static int sn_init(void) {
     g_q = ASensorManager_createEventQueue(g_mgr, looper, 3, NULL, NULL);
     g_accel = ASensorManager_getDefaultSensor(g_mgr, ASENSOR_TYPE_ACCELEROMETER);
     g_gyro  = ASensorManager_getDefaultSensor(g_mgr, ASENSOR_TYPE_GYROSCOPE);
+    g_step  = ASensorManager_getDefaultSensor(g_mgr, ASENSOR_TYPE_STEP_COUNTER);
     if (g_accel) { ASensorEventQueue_enableSensor(g_q, g_accel); ASensorEventQueue_setEventRate(g_q, g_accel, 50000); }
     if (g_gyro)  { ASensorEventQueue_enableSensor(g_q, g_gyro);  ASensorEventQueue_setEventRate(g_q, g_gyro, 50000); }
+    if (g_step)  { ASensorEventQueue_enableSensor(g_q, g_step); }   /* on-change; needs ACTIVITY_RECOGNITION (API29+) */
     return 1;
 }
 static void sn_pump(void) {
@@ -63,6 +70,7 @@ static void sn_pump(void) {
     while (ASensorEventQueue_getEvents(g_q, &e, 1) > 0) {
         if (e.type == ASENSOR_TYPE_ACCELEROMETER) { g_ax = e.data[0]; g_ay = e.data[1]; g_az = e.data[2]; }
         else if (e.type == ASENSOR_TYPE_GYROSCOPE) { g_gx = e.data[0]; g_gy = e.data[1]; g_gz = e.data[2]; }
+        else if (e.type == ASENSOR_TYPE_STEP_COUNTER) { g_steps = (long long)e.data[0]; }
     }
 }
 #endif
@@ -121,4 +129,15 @@ double os_gyro_z(void) {
 #endif
 }
 
-char *os_sensors_version(void) { return strdup("os_sensors 1.0.0"); }
+/* cumulative step count since boot, or -1 if unavailable.
+   Needs the "activity" permission (ACTIVITY_RECOGNITION) on Android 10+;
+   request it via os_permissions first. */
+long long os_steps(void) {
+#ifdef SN_ANDROID
+    if (!sn_init()) return -1; sn_pump(); return g_steps;
+#else
+    return -1;
+#endif
+}
+
+char *os_sensors_version(void) { return strdup("os_sensors 1.1.0"); }
