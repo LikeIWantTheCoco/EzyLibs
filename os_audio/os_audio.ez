@@ -1,0 +1,14 @@
+# ── os_audio: master volume / mute (extends os) ───────────────
+#   import "os_audio"
+#   fn main():
+#   {
+#       print("vol:", os_volume_get())
+#       os_volume_set(40)
+#       os_volume_mute(1)
+#   }
+
+extern fn os_volume_get() -> int        # 0-100, -1 unknown
+extern fn os_volume_set(pct: int) -> int
+extern fn os_volume_mute(on: int) -> int   # 1 mute / 0 unmute
+extern fn os_is_muted() -> int          # 1 / 0 / -1
+extern fn os_audio_version() -> string

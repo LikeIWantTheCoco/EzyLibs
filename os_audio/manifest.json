@@ -1,0 +1,10 @@
+{
+  "name":         "os_audio",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "Master output volume / mute (pactl/wpctl/osascript) — extends os",
+  "sources":      ["os_audio.c"],
+  "header":       "os_audio.ez",
+  "binary":       "libos_audio.so",
+  "extends":      "os"
+}
