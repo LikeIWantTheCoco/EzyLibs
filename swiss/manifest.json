@@ -11,6 +11,7 @@
     "swiss-stylesheet.js",
     "swiss-bridge.js",
     "swiss-gtkc.mjs",
+    "swiss-win32c.mjs",
     "swiss-sig.mjs",
     "swiss-winsdk.mjs",
     "swiss-winshim.c",

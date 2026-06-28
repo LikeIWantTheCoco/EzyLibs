@@ -10,7 +10,7 @@
 # in later without touching app code.
 set -e
 LIB="$HOME/.ezy/libs/swiss"
-RUNTIME="swiss.js swiss-reconciler.js swiss-host-web.js swiss-components.js swiss-stylesheet.js swiss-bridge.js swiss-gtkc.mjs swiss-sig.mjs swiss-winsdk.mjs swiss-winshim.c swiss-native.js"
+RUNTIME="swiss.js swiss-reconciler.js swiss-host-web.js swiss-components.js swiss-stylesheet.js swiss-bridge.js swiss-gtkc.mjs swiss-win32c.mjs swiss-sig.mjs swiss-winsdk.mjs swiss-winshim.c swiss-native.js"
 
 die() { echo "swiss: $1" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -311,11 +311,75 @@ host_os() {
   esac
 }
 
-# Desktop target (linux/windows/macos): the GTK frontend is implicit. Translate
-# React → C (build time), link the Ezy backend in-process (FFI), produce one
-# native GTK3 binary for the given OS. No JS engine ships in the app.
+# collect the ezylib link flags for any native EzyLib the backend imports. Native
+# .so/.dll only — these don't cross-compile, so this errors on a cross target.
+collect_ezylib_flags() {
+  target="$1"; host="$2"
+  ezylib_flags=""
+  for lib in $(grep -oE '^[[:space:]]*import[[:space:]]+"[^"]+"' backend/*.ez 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' | sort -u); do
+    libdir="$HOME/.ezy/libs/$lib"
+    [ -f "$libdir/lib$lib.so" ] || continue
+    if [ "$target" != "$host" ]; then
+      die "backend imports EzyLib '$lib' (native .so) — can't cross-compile to $target. Build for the host OS, or use a target-native lib."
+    fi
+    extra=$(sed -n 's/.*"link_flags":[[:space:]]*\[\([^]]*\)\].*/\1/p' "$libdir/manifest.json" 2>/dev/null | tr ',' ' ' | tr -d '"')
+    ezylib_flags="$ezylib_flags -L$libdir -l$lib -Wl,-rpath,$libdir $extra"
+    echo "swiss: linking EzyLib '$lib'"
+  done
+}
+
+# Windows target — NATIVE Win32. React/JSX → Win32 C (swiss-win32c), Ezy backend
+# linked in-process. The .exe links ONLY Windows system DLLs (user32/gdi32/
+# comctl32/comdlg32/shell32/ole32) — so it is self-contained: no GTK SDK to
+# install, no 480MB download, no DLL closure to bundle. One small portable .exe.
+build_win32() {
+  host=$(host_os)
+  [ -f swiss.json ] || die "no swiss.json — run inside a Swiss project"
+  have ezy || die "ezy not found on PATH"
+  have node || die "node not found (the Win32 translator runs on Node at build time)"
+  [ -d "$LIB" ] && copy_runtime src/swiss
+
+  echo "swiss: resolving toolchain for windows (via ezy)"
+  tc=$(ezy toolchain --platform windows) || die "ezy could not provide a windows toolchain"
+  CC=$(printf '%s\n'  "$tc" | sed -n 's/^CC=//p')
+  EXT=$(printf '%s\n' "$tc" | sed -n 's/^EXT=//p'); [ -n "$EXT" ] || EXT=".exe"
+  [ -n "$CC" ] || die "ezy toolchain did not return a compiler for windows"
+
+  name=$(basename "$PWD")
+  work=.swiss/win32; mkdir -p "$work"
+
+  # 1) backend: Ezy → C → object (windows, via ezy's MinGW CC). Neutralize main.
+  echo "swiss: compiling backend for windows (Ezy → C, FFI in-process)"
+  ezy emit-c backend/main.ez > "$work/backend.c"
+  sed -i 's/^int main(/int __ezy_backend_main(/' "$work/backend.c"
+  "$CC" -D_GNU_SOURCE -c "$work/backend.c" -o "$work/backend.o"
+  "$CC" -c src/swiss/swiss-winshim.c -o "$work/winshim.o"   # POSIX bits mingw lacks
+
+  collect_ezylib_flags windows "$host"
+
+  # 2) frontend: React/JSX → native Win32 C (build-time Node only)
+  echo "swiss: translating React → Win32 C"
+  node src/swiss/swiss-sig.mjs backend/*.ez --out "$work/backend.sig.json"
+  node src/swiss/swiss-win32c.mjs src/App.jsx --out "$work/frontend.c" \
+    --title "$name" --sig "$work/backend.sig.json"
+
+  # 3) link one native .exe — system DLLs only, no GTK
+  echo "swiss: linking native Win32 binary ($CC)"
+  # -static folds libwinpthread / libgcc into the .exe (the Ezy runtime uses
+  # pthreads) so the binary stays self-contained — only system DLLs remain.
+  "$CC" "$work/frontend.c" "$work/backend.o" "$work/winshim.o" -o "$name$EXT" \
+    -mwindows -static $ezylib_flags \
+    -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshell32 -lole32 -lwinpthread -lm
+  echo "swiss: built ./$name$EXT  (portable — links only Windows system DLLs)"
+  echo "       quick test:  wine ./$name$EXT"
+}
+
+# Desktop target (linux/macos): the GTK frontend is implicit. Translate React → C
+# (build time), link the Ezy backend in-process (FFI), produce one native GTK3
+# binary. Windows is handled natively by build_win32 (no GTK). No JS engine ships.
 build_desktop() {
   target="$1"
+  [ "$target" = windows ] && { build_win32; return; }
   host=$(host_os)
   [ -f swiss.json ] || die "no swiss.json — run inside a Swiss project"
   have ezy || die "ezy not found on PATH"
@@ -471,7 +535,10 @@ cmd_package() {
     case "$1" in --platform) platform="$2"; shift 2 ;; *) shift ;; esac
   done
   case "$platform" in
-    windows) build_desktop windows; bundle_windows
+    windows) build_desktop windows   # native Win32: the .exe is already self-contained
+             out="dist/${name}-windows"; rm -rf "$out"; mkdir -p "$out"
+             cp "${name}.exe" "$out/"
+             echo "swiss: native Win32 .exe is self-contained (system DLLs only) → $out/"
              if have zip; then ( cd dist && zip -qr "${name}-windows.zip" "${name}-windows" ); echo "swiss: → dist/${name}-windows.zip"; fi ;;
     linux)   build_desktop linux;   bundle_linux ;;
     macos)   build_desktop macos;    die "macos bundling not in v0.1 (binary built)" ;;
@@ -523,7 +590,7 @@ case "$1" in
     echo "  swiss dev                        web dev server (vite + wasm backend)"
     echo "  swiss build                      desktop GTK app for the host OS"
     echo "  swiss build --platform linux     desktop GTK app (linux)"
-    echo "  swiss build --platform windows   desktop GTK app (.exe)"
+    echo "  swiss build --platform windows   native Win32 .exe (no GTK, system DLLs only)"
     echo "  swiss build --platform macos     desktop GTK app (macOS)"
     echo "  swiss build --platform web       web build (React DOM + wasm) → dist/"
     echo "  swiss package [--platform OS]    build + bundle a distributable (deps included)"

@@ -11,38 +11,39 @@ use GTK implicitly; `web` uses the DOM. Swiss compiles the Ezy backend for that
 OS automatically.
 
 ```bash
-swiss build                      # desktop GTK app for the HOST os
+swiss build                      # desktop app for the HOST os (GTK on linux/macos)
 swiss build --platform linux     # desktop GTK (linux)
-swiss build --platform windows   # desktop GTK (.exe)
+swiss build --platform windows   # NATIVE Win32 .exe (no GTK, system DLLs only)
 swiss build --platform macos     # desktop GTK (macOS)
 swiss build --platform web       # React DOM + Ezy wasm → dist/
-swiss package --platform windows # build + bundle a self-contained .exe (DLLs incl.)
+swiss package --platform windows # build + zip the self-contained .exe (no DLLs to bundle)
 swiss package --platform linux   # build + bundle ELF + its .so closure
 swiss dev                        # web dev server (vite)
 ```
 
-`swiss package` produces a distributable that runs **without GTK installed**:
-on windows it copies the recursive DLL closure (via `objdump`) + GTK data + a
-font next to the `.exe` (→ `dist/<name>-windows/` and a `.zip`); on linux it
-bundles the `ldd` closure + a launcher. The windows GTK3 SDK itself is
-auto-provisioned on first cross build (MSYS2 closure → `~/.ezy/swiss/sysroot/`).
+`swiss package` produces a distributable. **Windows is native Win32**, so the
+`.exe` already links only system DLLs — packaging just drops it in
+`dist/<name>-windows/` and zips it (nothing to bundle). The **linux/macos** GTK
+builds run **without GTK installed** by bundling the `ldd` closure + a launcher.
 
 Desktop builds reuse **ezy's** cross toolchain (`ezy toolchain --platform X` →
-the C compiler, auto-installing MinGW/NDK/osxcross with consent) and the **GTK3
-SDK** is offered the same way: if missing, `swiss build` asks `y/N` and installs
-it (`libgtk-3-dev` / `gtk3-devel` / `gtk+3` / mingw GTK3, by package manager).
-A cross target with no clean distro package: set `SWISS_GTK_SYSROOT` to a GTK3
-sysroot (MSYS2 mingw64 / gvsbuild / MXE).
+the C compiler, auto-installing MinGW/NDK/osxcross with consent). For **linux/
+macos** the **GTK3 SDK** is offered the same way: if missing, `swiss build` asks
+`y/N` and installs it (`libgtk-3-dev` / `gtk3-devel` / `gtk+3`, by package
+manager); set `SWISS_GTK_SYSROOT` for a cross target with no clean distro
+package. The **windows** target needs no GTK at all — just MinGW (which ezy
+provisions), since the frontend is native Win32.
 
 | Platform | Frontend | Backend | Status |
 |----------|----------|---------|--------|
 | `web` | React → **DOM** (runtime reconciler) | Ezy → wasm (typed ccall) | ✅ v0.1 |
 | `linux` (host) | React → **GTK C** (build-time translator) | Ezy → native, FFI in-process | ✅ v0.1 |
-| `windows` / `macos` | React → GTK C | Ezy → native (cross) | ◐ toolchain reused; needs target GTK SDK |
+| `windows` | React → **native Win32 C** (build-time translator) | Ezy → native (cross, MinGW) | ✅ v0.1 |
+| `macos` | React → GTK C | Ezy → native (cross) | ◐ toolchain reused; needs target GTK SDK |
 | `android` | React → Android Views (JNI) | Ezy → `.so` (NDK) | ⏳ planned |
 | `ios` | React → UIKit (FFI) | Ezy → static lib | ⏳ planned |
 
-**Two translation strategies, by design:**
+**Three translation strategies, by design:**
 
 - **Web = runtime reconciler.** React + `react-reconciler` run in the browser; a
   HostConfig builds DOM. JSON bridge over wasm `ccall` (carries objects/arrays).
@@ -51,6 +52,22 @@ sysroot (MSYS2 mingw64 / gvsbuild / MXE).
   native imperative code (Svelte-style: `useState`→struct cell, `setState`→update
   only the widgets that read it). `ezy.call('f')` → a direct C call into the Ezy
   backend linked in-process (native types, no marshalling). One native binary.
+  Used for linux/macos desktop.
+- **Win32 = build-time translator (`swiss-win32c.mjs`).** Same Svelte-style
+  lowering, but emits **native Win32 C** — `<Button>`→`CreateWindow("BUTTON")`,
+  `setState`→`SetWindowText`/`SendMessage` on just the controls that read the
+  cell. Win32 has no box layout, so the app carries a tiny runtime stack/flex
+  **layout engine** (a node tree re-laid-out on `WM_SIZE`). The `.exe` links only
+  the Windows **system DLLs** (user32/gdi32/comctl32/comdlg32/shell32/ole32) — so
+  it's a single self-contained binary: **no GTK SDK to install, no DLL bundle.**
+
+  Subset (v0.1): View/Text/Button/Input/TextArea/Checkbox/Switch/Select/Slider/
+  ProgressBar/Separator/Image/List, `useState`/`useMemo`/`useEffect`/`useRef`,
+  derived consts, helper methods, presentational components, `{expr}` text,
+  `{cond && <X/>}` / `{a ? <X/> : <Y/>}`, `{arr.map(...)}`, `onPress`/`onChange`,
+  reactive text/label/disabled/visibility, `int()`/`str()`/`Math.*`, string
+  methods, `setInterval`/`setTimeout`. Styles: padding/gap/flexDirection/width/
+  height/flex/align/justify + fontSize/fontWeight/color/backgroundColor.
 
   Subset (v0.1): function component, `useState`, `View/Text/Button`, `{expr}`
   text, `onPress`; handlers limited to `setX(<simple expr | ezy.call>)`.
