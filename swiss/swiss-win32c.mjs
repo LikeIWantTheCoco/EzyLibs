@@ -800,7 +800,7 @@ function emit(ast, opts) {
       }
       out.build.push(`  s->${f} = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
       const ph = strAttr(a.placeholder);
-      if (ph) out.build.push(`  SendMessageA(s->${f}, EM_SETCUEBANNER, TRUE, (LPARAM)L${cwstr(ph)});`);
+      if (ph) out.build.push(`  SendMessageW(s->${f}, EM_SETCUEBANNER, TRUE, (LPARAM)L${cwstr(ph)});`);
       if (cell) {
         out.build.push(`  SetWindowTextA(s->${f}, ${cell.t === 'string' ? `s->${cell.name}` : '""'});`);
         deps[cell.name].push(`{ char* _t = swiss_gettext(s->${f}); if (strcmp(_t, s->${cell.name}) != 0) SetWindowTextA(s->${f}, s->${cell.name}); free(_t); }`);
@@ -1382,7 +1382,7 @@ ${cmdCases || '      break;'}
 int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
   (void)hp; (void)cmd;
   g_hinst = hi;
-  InitCommonControls();
+  { INITCOMMONCONTROLSEX _ic = { sizeof(INITCOMMONCONTROLSEX), ICC_STANDARD_CLASSES | ICC_BAR_CLASSES | ICC_PROGRESS_CLASS }; InitCommonControlsEx(&_ic); }
 ${cells.filter((c) => c.cinit != null).map((c) => `  S.${c.name} = ${c.cinit};`).join('\n')}
 ${refs.map((r) => `  S.${r.name}__current = ${r.cinit};`).join('\n')}
   swiss_init(&S);

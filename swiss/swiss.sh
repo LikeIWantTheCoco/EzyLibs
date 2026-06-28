@@ -360,6 +360,20 @@ build_win32() {
   "$CC" -D_GNU_SOURCE -c "$work/backend.c" -o "$work/backend.o"
   "$CC" -c src/swiss/swiss-winshim.c -o "$work/winshim.o"   # POSIX bits mingw lacks
 
+  # app manifest → comctl32 v6 (themed controls + EM_SETCUEBANNER placeholders)
+  cat > "$work/app.manifest" <<'XML'
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency><dependentAssembly><assemblyIdentity
+    type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0"
+    processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
+  </dependentAssembly></dependency>
+</assembly>
+XML
+  printf '1 24 "app.manifest"\n' > "$work/app.rc"
+  WINDRES="${CC%gcc}windres"; have "$WINDRES" || WINDRES=x86_64-w64-mingw32-windres
+  ( cd "$work" && "$WINDRES" app.rc -o manifest.o ) || die "windres failed (manifest)"
+
   collect_ezylib_flags windows "$host"
 
   # 2) frontend: React/JSX → native Win32 C (build-time Node only)
@@ -372,7 +386,7 @@ build_win32() {
   echo "swiss: linking native Win32 binary ($CC)"
   # -static folds libwinpthread / libgcc into the .exe (the Ezy runtime uses
   # pthreads) so the binary stays self-contained — only system DLLs remain.
-  "$CC" "$work/frontend.c" "$work/backend.o" "$work/winshim.o" -o "$name$EXT" \
+  "$CC" "$work/frontend.c" "$work/backend.o" "$work/winshim.o" "$work/manifest.o" -o "$name$EXT" \
     -mwindows -static $ezylib_flags \
     -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshell32 -lole32 -lwinpthread -lm
   echo "swiss: built ./$name$EXT  (portable — links only Windows system DLLs)"

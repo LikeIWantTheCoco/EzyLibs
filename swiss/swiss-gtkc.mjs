@@ -586,6 +586,10 @@ function emit(ast, opts) {
     for (const k in st) {
       const v = st[k];
       if (k === 'padding') css.push(`padding:${v}px`);   // inner padding (not outer margin)
+      // height → min-height (can shrink below the theme default). GTK adds
+      // padding on top, so subtract it to make the TOTAL height ≈ the JSX value
+      // (matching the Win32 target, which treats height as the full size).
+      else if (k === 'height') css.push(`min-height:${Math.max(0, v - 2 * (st.padding || 0) - 2)}px`);
       else if (k === 'fontSize') css.push(`font-size:${v}px`);
       else if (k === 'fontWeight') css.push(`font-weight:${v}`);
       else if (k === 'color') css.push(`color:${v}`);
@@ -702,7 +706,10 @@ function emit(ast, opts) {
     if (st.marginBottom != null) out.build.push(`  gtk_widget_set_margin_bottom(${v}, ${Number(st.marginBottom)});`);
     if (st.marginLeft != null) out.build.push(`  gtk_widget_set_margin_start(${v}, ${Number(st.marginLeft)});`);
     if (st.marginRight != null) out.build.push(`  gtk_widget_set_margin_end(${v}, ${Number(st.marginRight)});`);
-    if (st.width != null || st.height != null) out.build.push(`  gtk_widget_set_size_request(${v}, ${Number(st.width != null ? st.width : -1)}, ${Number(st.height != null ? st.height : -1)});`);
+    // width via size_request; height via CSS min-height (size_request is a
+    // minimum GTK won't shrink below its natural height, so a smaller explicit
+    // height would be ignored — min-height can actually reduce it).
+    if (st.width != null) out.build.push(`  gtk_widget_set_size_request(${v}, ${Number(st.width)}, -1);`);
     if (st.alignItems && ALIGN[st.alignItems]) out.build.push(`  gtk_widget_set_halign(${v}, ${ALIGN[st.alignItems]});`);
     if (st.justifyContent && ALIGN[st.justifyContent]) out.build.push(`  gtk_widget_set_valign(${v}, ${ALIGN[st.justifyContent]});`);
   }
