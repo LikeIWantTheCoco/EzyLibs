@@ -69,6 +69,42 @@ static char *run_capture(const char *cmd) {
 }
 #endif
 
+/* ── windows: a small modal input box (shared by input + password) ── */
+#ifdef UI_WINDOWS
+static char win_in_buf[2048];
+static int  win_in_ok;
+static LRESULT CALLBACK win_in_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    if (m == WM_COMMAND) {
+        if (LOWORD(w) == 1) { GetWindowText(GetDlgItem(h, 100), win_in_buf, sizeof win_in_buf); win_in_ok = 1; DestroyWindow(h); }
+        else if (LOWORD(w) == 2) { win_in_ok = 0; DestroyWindow(h); }
+        return 0;
+    }
+    if (m == WM_CLOSE)   { win_in_ok = 0; DestroyWindow(h); return 0; }
+    if (m == WM_DESTROY) { PostQuitMessage(0); return 0; }
+    return DefWindowProc(h, m, w, l);
+}
+static char *win_input(const char *title, const char *prompt, const char *deflt, int password) {
+    win_in_ok = 0; win_in_buf[0] = 0;
+    WNDCLASS wc; memset(&wc, 0, sizeof wc);
+    wc.lpfnWndProc = win_in_proc; wc.hInstance = GetModuleHandle(NULL);
+    wc.lpszClassName = "EzyInputWnd"; wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    RegisterClass(&wc);
+    HWND h = CreateWindow("EzyInputWnd", title && *title ? title : "Input",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 360, 160,
+        NULL, NULL, wc.hInstance, NULL);
+    CreateWindow("STATIC", prompt ? prompt : "", WS_CHILD | WS_VISIBLE, 12, 12, 330, 20, h, NULL, wc.hInstance, NULL);
+    DWORD est = WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | (password ? ES_PASSWORD : 0);
+    HWND e = CreateWindow("EDIT", deflt ? deflt : "", est, 12, 40, 330, 24, h, (HMENU)100, wc.hInstance, NULL);
+    CreateWindow("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 180, 80, 75, 26, h, (HMENU)1, wc.hInstance, NULL);
+    CreateWindow("BUTTON", "Cancel", WS_CHILD | WS_VISIBLE, 267, 80, 75, 26, h, (HMENU)2, wc.hInstance, NULL);
+    ShowWindow(h, SW_SHOW); SetFocus(e);
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0)) { if (!IsDialogMessage(h, &msg)) { TranslateMessage(&msg); DispatchMessage(&msg); } }
+    return strdup(win_in_ok ? win_in_buf : "");
+}
+#endif
+
 /* ════════════════════════ file open ════════════════════════ */
 /* `filter` is an optional space-separated glob list, e.g. "*.png *.jpg" ("" = any) */
 char *os_ui_open_file(const char *title, const char *filter) {
@@ -210,8 +246,10 @@ char *os_ui_input(const char *title, const char *prompt, const char *deflt) {
         "osascript -e 'text returned of (display dialog \"%s\" with title \"%s\" default answer \"%s\")' 2>/dev/null",
         prompt ? prompt : "", title && *title ? title : "Input", deflt ? deflt : "");
     return run_capture(cmd);
+#elif defined(UI_WINDOWS)
+    return win_input(title, prompt, deflt, 0);
 #else
-    (void)title; (void)prompt; (void)deflt; return strdup("");   /* windows/mobile: reserved */
+    (void)title; (void)prompt; (void)deflt; return strdup("");   /* mobile: reserved */
 #endif
 }
 
@@ -229,8 +267,29 @@ char *os_ui_pick_color(const char *title) {
         free(s); char *hex = malloc(8); snprintf(hex, 8, "#%02x%02x%02x", r & 255, g & 255, b & 255); return hex;
     }
     return s;   /* already #hex or other form */
+#elif defined(UI_MACOS)
+    (void)title;
+    /* AppleScript `choose color` returns three 16-bit components */
+    char *s = run_capture("osascript -e 'set c to choose color' "
+                          "-e 'return (item 1 of c as text) & \",\" & (item 2 of c as text) & \",\" & (item 3 of c as text)' 2>/dev/null");
+    int r = 0, g = 0, b = 0;
+    if (sscanf(s, "%d,%d,%d", &r, &g, &b) == 3) {
+        free(s); char *hex = malloc(8);
+        snprintf(hex, 8, "#%02x%02x%02x", (r / 257) & 255, (g / 257) & 255, (b / 257) & 255);
+        return hex;
+    }
+    return s;
+#elif defined(UI_WINDOWS)
+    (void)title;
+    static COLORREF custom[16];
+    CHOOSECOLOR cc; memset(&cc, 0, sizeof cc);
+    cc.lStructSize = sizeof cc; cc.lpCustColors = custom; cc.Flags = CC_FULLOPEN | CC_RGBINIT;
+    if (!ChooseColor(&cc)) return strdup("");
+    char *hex = malloc(8);
+    snprintf(hex, 8, "#%02x%02x%02x", GetRValue(cc.rgbResult), GetGValue(cc.rgbResult), GetBValue(cc.rgbResult));
+    return hex;
 #else
-    (void)title; return strdup("");   /* macos/windows/mobile: reserved */
+    (void)title; return strdup("");   /* mobile: reserved */
 #endif
 }
 /* pick a date → "YYYY-MM-DD" ("" if cancelled) */
@@ -290,6 +349,8 @@ char *os_ui_password(const char *title, const char *prompt) {
         "osascript -e 'text returned of (display dialog \"%s\" with title \"%s\" default answer \"\" with hidden answer)' 2>/dev/null",
         prompt ? prompt : "Password:", title && *title ? title : "Password");
     return run_capture(cmd);
+#elif defined(UI_WINDOWS)
+    return win_input(title, prompt, "", 1);
 #else
     (void)title; (void)prompt; return strdup("");
 #endif
