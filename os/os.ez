@@ -23,8 +23,10 @@ extern fn os_tmpdir() -> string                     # system temp dir
 extern fn os_user() -> string                       # current username
 
 # ── processes ──
-extern fn os_run(cmd: string) -> int                # run shell cmd -> exit status
+extern fn os_run(cmd: string) -> int                # run via shell -> exit status
 extern fn os_run_capture(cmd: string) -> string     # run cmd -> its stdout
+extern fn os_exec(argv: [string]) -> int            # run argv directly (no shell), wait -> exit status
+extern fn os_kill(pid: int, sig: int) -> int        # send signal to a process
 extern fn os_pid() -> int
 extern fn os_ppid() -> int
 extern fn os_hostname() -> string

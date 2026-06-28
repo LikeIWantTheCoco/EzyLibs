@@ -30,6 +30,8 @@
   #include <unistd.h>
   #include <sys/utsname.h>
   #include <sys/types.h>
+  #include <sys/wait.h>
+  #include <signal.h>
   #include <glob.h>
   #define EZY_MKDIR(p)   mkdir((p), 0755)
   #define EZY_GETCWD     getcwd
@@ -41,6 +43,10 @@
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
+
+/* Ezy's built-in array (matches the runtime layout); string arrays store each
+   char* in a `data` slot. Used to accept a [string] argv in os_exec. */
+typedef struct { long long len, cap; long long *data; } EzyArr;
 
 /* ───────────────────────── environment ───────────────────────── */
 char *os_getenv(const char *name) {
@@ -133,6 +139,8 @@ long long os_ppid(void) { return 0; }
 char *os_hostname(void) { const char *h = getenv("COMPUTERNAME"); return strdup(h ? h : ""); }
 char *os_platform(void) { return strdup("windows"); }
 char *os_arch(void)     { const char *a = getenv("PROCESSOR_ARCHITECTURE"); return strdup(a ? a : "x86_64"); }
+long long os_exec(EzyArr *argv) { (void)argv; return -1; }   /* see the per-OS os lib */
+long long os_kill(long long pid, long long sig) { (void)pid; (void)sig; return 0; }
 #else
 long long os_pid(void)  { return (long long)getpid(); }
 long long os_ppid(void) { return (long long)getppid(); }
@@ -141,6 +149,25 @@ char *os_hostname(void) {
     if (gethostname(b, sizeof b) != 0) return strdup("");
     b[sizeof b - 1] = 0;
     return strdup(b);
+}
+/* run a program directly (no shell), wait, return its exit status.
+   argv[0] is the program; args are passed verbatim (no quoting/injection). */
+long long os_exec(EzyArr *argv) {
+    if (!argv || argv->len <= 0) return -1;
+    int n = (int)argv->len;
+    char **a = malloc((size_t)(n + 1) * sizeof(char *));
+    for (int i = 0; i < n; i++) a[i] = (char *)(size_t)argv->data[i];
+    a[n] = NULL;
+    pid_t pid = fork();
+    if (pid < 0) { free(a); return -1; }
+    if (pid == 0) { execvp(a[0], a); _exit(127); }
+    free(a);
+    int st; if (waitpid(pid, &st, 0) < 0) return -1;
+    return WIFEXITED(st) ? (long long)WEXITSTATUS(st) : -1;
+}
+/* send signal `sig` to process `pid` (1 ok / 0 fail) */
+long long os_kill(long long pid, long long sig) {
+    return kill((pid_t)pid, (int)sig) == 0 ? 1 : 0;
 }
 /* OS name: "linux", "darwin", ... (lowercased uname sysname) */
 char *os_platform(void) {
