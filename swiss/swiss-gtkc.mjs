@@ -585,7 +585,8 @@ function emit(ast, opts) {
     const css = [];
     for (const k in st) {
       const v = st[k];
-      if (k === 'fontSize') css.push(`font-size:${v}px`);
+      if (k === 'padding') css.push(`padding:${v}px`);   // inner padding (not outer margin)
+      else if (k === 'fontSize') css.push(`font-size:${v}px`);
       else if (k === 'fontWeight') css.push(`font-weight:${v}`);
       else if (k === 'color') css.push(`color:${v}`);
       else if (k === 'backgroundColor') css.push(`background-color:${v};background-image:none`);
@@ -613,6 +614,10 @@ function emit(ast, opts) {
       const s = String(raw);
       if (k === 'padding') o.padding = num(s);
       else if (k === 'margin') { if (/auto/.test(s)) o.alignItems = 'center'; else o.margin = num(s); }
+      else if (k === 'marginTop') o.marginTop = num(s);
+      else if (k === 'marginBottom') o.marginBottom = num(s);
+      else if (k === 'marginLeft') o.marginLeft = num(s);
+      else if (k === 'marginRight') o.marginRight = num(s);
       else if (k === 'width') { if (s === '100%') o.flex = 1; else o.width = num(s); }
       else if (k === 'maxWidth' || k === 'minWidth') o.width = num(s);
       else if (k === 'height' || k === 'maxHeight' || k === 'minHeight') o.height = num(s);
@@ -691,8 +696,12 @@ function emit(ast, opts) {
   const ALIGN = { center: 'GTK_ALIGN_CENTER', start: 'GTK_ALIGN_START', 'flex-start': 'GTK_ALIGN_START', end: 'GTK_ALIGN_END', 'flex-end': 'GTK_ALIGN_END', stretch: 'GTK_ALIGN_FILL' };
   function applyStyle(v, st) {
     if (!st) return;
-    if (st.padding != null) for (const s of ['top', 'bottom', 'start', 'end']) out.build.push(`  gtk_widget_set_margin_${s}(${v}, ${Number(st.padding)});`);
+    // padding is inner spacing (emitted as CSS in classForMerged), not outer margin
     if (st.margin != null) for (const s of ['top', 'bottom', 'start', 'end']) out.build.push(`  gtk_widget_set_margin_${s}(${v}, ${Number(st.margin)});`);
+    if (st.marginTop != null) out.build.push(`  gtk_widget_set_margin_top(${v}, ${Number(st.marginTop)});`);
+    if (st.marginBottom != null) out.build.push(`  gtk_widget_set_margin_bottom(${v}, ${Number(st.marginBottom)});`);
+    if (st.marginLeft != null) out.build.push(`  gtk_widget_set_margin_start(${v}, ${Number(st.marginLeft)});`);
+    if (st.marginRight != null) out.build.push(`  gtk_widget_set_margin_end(${v}, ${Number(st.marginRight)});`);
     if (st.width != null || st.height != null) out.build.push(`  gtk_widget_set_size_request(${v}, ${Number(st.width != null ? st.width : -1)}, ${Number(st.height != null ? st.height : -1)});`);
     if (st.alignItems && ALIGN[st.alignItems]) out.build.push(`  gtk_widget_set_halign(${v}, ${ALIGN[st.alignItems]});`);
     if (st.justifyContent && ALIGN[st.justifyContent]) out.build.push(`  gtk_widget_set_valign(${v}, ${ALIGN[st.justifyContent]});`);
