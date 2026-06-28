@@ -1,0 +1,19 @@
+# ── os_background: run app work off the main thread (extends os) ─
+# Threads on all platforms (pthreads / Win32). Tasks are Ezy fn() callbacks.
+# For work that must survive app suspension on mobile, request "background"
+# via os_permissions and let the host (swiss) declare the platform capability.
+#
+#   import "os_background"
+#   fn tick(): { print("background tick") }
+#   fn main():
+#   {
+#       id = os_bg_every(1000, tick)   # every 1s
+#       # ... later ...
+#       os_bg_stop(id)
+#   }
+
+extern fn os_bg_run(cb: fn()) -> int           # run once on a bg thread -> 1 ok
+extern fn os_bg_every(ms: int, cb: fn()) -> int # run every ms -> task id (>=0) / -1
+extern fn os_bg_stop(id: int) -> int           # stop a periodic task
+extern fn os_bg_stop_all() -> int
+extern fn os_background_version() -> string

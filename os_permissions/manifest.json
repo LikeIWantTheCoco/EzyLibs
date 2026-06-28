@@ -1,6 +1,6 @@
 {
   "name":         "os_permissions",
-  "version":      "1.1.0",
+  "version":      "1.2.0",
   "type":         "c",
   "description":  "Central runtime permissions (Android JNI; desktop=granted; iOS reserved) — extends os",
   "sources":      ["os_permissions.c"],

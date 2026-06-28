@@ -13,8 +13,13 @@
 #   }
 #
 # Names: location, camera, microphone, storage, notifications, contacts,
-# activity, bluetooth (or a full "android.permission.X"). On desktop every
-# permission reports granted (no runtime model). iOS reserved.
+# activity, bluetooth, background (or a full "android.permission.X"). On
+# desktop every permission reports granted (no runtime model). iOS reserved.
+#
+# "background" (run work while suspended): Android maps it to
+# FOREGROUND_SERVICE (declare it in the manifest + run a foreground Service);
+# iOS has no runtime prompt — declare UIBackgroundModes in Info.plist. Pair
+# this with os_background. The host (swiss) wires the platform capability.
 
 extern fn os_perm_check(name: string) -> int     # 1 granted / 0 not
 extern fn os_perm_request(name: string) -> int   # prompt; async on Android (re-check)

@@ -82,6 +82,7 @@ static const char *perm_to_android(const char *n) {
     if (!strcmp(n, "contacts"))      return "android.permission.READ_CONTACTS";
     if (!strcmp(n, "activity"))      return "android.permission.ACTIVITY_RECOGNITION";
     if (!strcmp(n, "bluetooth"))     return "android.permission.BLUETOOTH_CONNECT";
+    if (!strcmp(n, "background"))    return "android.permission.FOREGROUND_SERVICE";  /* + a foreground Service */
     return n;   /* allow passing a full "android.permission.X" through */
 }
 static int android_check(const char *name) {
