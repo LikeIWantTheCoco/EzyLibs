@@ -18,18 +18,20 @@
 #include <sys/stat.h>
 
 /* ── platform detection ──────────────────────────────────────────
-   Implemented: linux, windows, macos. Reserved (compile via the POSIX
-   path for now, to be specialised later): android, ios.            */
+   linux, windows, macos, android, ios. The unix-like targets share the
+   POSIX implementation (with a few per-OS tweaks: platform name, tmpdir).
+   Note on iOS: fork/exec is blocked by the app sandbox, so os_exec returns
+   -1 there at runtime (the call still compiles).                    */
 #if defined(_WIN32)
   #define EZY_WINDOWS 1
 #else
   #define EZY_POSIX 1
   #if defined(__ANDROID__)
-    #define EZY_ANDROID 1     /* TODO: Android-specific os lib */
+    #define EZY_ANDROID 1
   #elif defined(__APPLE__)
     #include <TargetConditionals.h>
     #if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-      #define EZY_IOS 1       /* TODO: iOS-specific os lib */
+      #define EZY_IOS 1
     #else
       #define EZY_MACOS 1
     #endif
@@ -52,7 +54,10 @@
   #include <sys/types.h>
   #include <sys/wait.h>
   #include <signal.h>
-  #include <glob.h>
+  #include <fnmatch.h>
+  #ifndef EZY_ANDROID
+    #include <glob.h>   /* Bionic lacks glob() before API 28 — see os_glob */
+  #endif
   #define EZY_MKDIR(p)   mkdir((p), 0755)
   #define EZY_GETCWD     getcwd
   #define EZY_CHDIR      chdir
@@ -101,7 +106,12 @@ char *os_tmpdir(void) {
     const char *t = getenv("TMPDIR");
     if (!t || !*t) t = getenv("TMP");
     if (!t || !*t) t = getenv("TEMP");
-    return strdup(t && *t ? t : "/tmp");
+    if (t && *t) return strdup(t);
+#if defined(EZY_ANDROID)
+    return strdup("/data/local/tmp");   /* Android has no /tmp */
+#else
+    return strdup("/tmp");
+#endif
 }
 /* the current username */
 char *os_user(void) {
@@ -398,6 +408,27 @@ char *os_glob(const char *pattern) {
         memcpy(buf + len, full, n); len += n;
     } while (FindNextFile(h, &fd));
     FindClose(h);
+    buf[len] = 0;
+    return buf;
+#elif defined(EZY_ANDROID)
+    /* Bionic lacks glob() before API 28 — emulate with opendir + fnmatch */
+    char dir[PATH_MAX]; const char *pat; const char *slash = strrchr(pattern, '/');
+    if (slash) { size_t dn = (size_t)(slash - pattern); memcpy(dir, pattern, dn); dir[dn] = 0; pat = slash + 1; }
+    else { dir[0] = '.'; dir[1] = 0; pat = pattern; }
+    DIR *d = opendir(dir[0] ? dir : "/"); if (!d) return strdup("");
+    size_t cap = 4096, len = 0; char *buf = malloc(cap); struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        if (fnmatch(pat, e->d_name, 0) != 0) continue;
+        char full[PATH_MAX];
+        if (slash) snprintf(full, sizeof full, "%s/%s", dir, e->d_name);
+        else       snprintf(full, sizeof full, "%s", e->d_name);
+        size_t n = strlen(full);
+        if (len + n + 2 > cap) { while (len + n + 2 > cap) cap *= 2; buf = realloc(buf, cap); }
+        if (len) buf[len++] = '\n';
+        memcpy(buf + len, full, n); len += n;
+    }
+    closedir(d);
     buf[len] = 0;
     return buf;
 #else
