@@ -26,7 +26,9 @@ export function render(element, container, opts) {
 }
 
 export { ezy } from './swiss-bridge.js';
+export { native } from './swiss-native.js';   // the ONE native API (web backend)
 export { View, Text, Button, Input, FlatList, ScrollView } from './swiss-components.js';
 export { StyleSheet } from './swiss-stylesheet.js';
 
-export default { render, ezy };
+import { native } from './swiss-native.js';
+export default { render, ezy, native };

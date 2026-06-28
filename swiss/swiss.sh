@@ -10,7 +10,7 @@
 # in later without touching app code.
 set -e
 LIB="$HOME/.ezy/libs/swiss"
-RUNTIME="swiss.js swiss-reconciler.js swiss-host-web.js swiss-components.js swiss-stylesheet.js swiss-bridge.js swiss-gtkc.mjs swiss-sig.mjs swiss-winsdk.mjs swiss-winshim.c"
+RUNTIME="swiss.js swiss-reconciler.js swiss-host-web.js swiss-components.js swiss-stylesheet.js swiss-bridge.js swiss-gtkc.mjs swiss-sig.mjs swiss-winsdk.mjs swiss-winshim.c swiss-native.js"
 
 die() { echo "swiss: $1" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -100,7 +100,13 @@ scaffold() {
   [ -e "$name" ] && die "'$name' already exists"
   mkdir -p "$name/src/swiss" "$name/backend"
   copy_runtime "$name/src/swiss"
+  # the native facade lives in the backend so `import "swiss-native.ez"` resolves
+  cp "$LIB/swiss-native.ez" "$name/backend/swiss-native.ez"
 
+  # permissions: declare EVERY device permission the app uses here. Swiss emits
+  # them into the platform manifest (AndroidManifest / Info.plist) on mobile
+  # builds; you must ALSO request them at runtime via swiss_request(...) in the
+  # backend (the os_permissions fragment). Both are required.
   cat > "$name/swiss.json" <<JSON
 {
   "name": "$name",
@@ -108,6 +114,7 @@ scaffold() {
   "entry": "src/main.jsx",
   "backend": "backend/main.ez",
   "platforms": ["web"],
+  "permissions": [],
   "web": { "title": "$name" }
 }
 JSON
@@ -205,9 +212,6 @@ JS
 # Swiss backend — plain native-typed Ezy functions. The SAME signatures serve
 # every target: web types a wasm ccall, gtk calls them directly in-process.
 # Call them from the frontend with  ezy.call('name', ...args).
-#
-# No `fn main` here (Swiss provides the entry point on each target). Native
-# EzyLibs (json/sqlite) link on gtk but not on the wasm/web target yet.
 
 count = 0
 
@@ -217,6 +221,27 @@ fn bump() -> int:
     count = count + 1
     return count
 }
+
+# ── Native device access (files, dialogs, notifications, brightness, battery,
+#    GPS, sensors, background, …) ──
+# It is the ONE sanctioned native API. On DESKTOP/MOBILE targets, uncomment the
+# import and call swiss_*; the os libs link automatically:
+#
+#   import "swiss-native.ez"
+#   fn save_note(text: string) -> int:
+#   {
+#       p = swiss_save_dialog("Save note", "note.txt")
+#       if p.len() == 0: { return 0 }
+#       swiss_write(p, text); swiss_notify("Saved", p); return 1
+#   }
+#   fn where_am_i() -> string:                       # needs "location" in swiss.json
+#   { if swiss_request("location") == 0: { return "" } ; return swiss_location() }
+#
+# On the WEB target the same capabilities come from JS instead (native C libs
+# aren't in wasm):  import { native } from 'swiss';  native.notify('Hi','there')
+#
+# Either way: every permission you use must be declared in swiss.json
+# "permissions" AND requested at runtime (swiss_request / native.request).
 EZ
 
   cat > "$name/.gitignore" <<'GI'
@@ -231,10 +256,38 @@ GI
   echo "  cd $name && npm install && swiss dev"
 }
 
+# Translate swiss.json "permissions" into platform manifest fragments. The dev
+# declares permissions ONCE in swiss.json; Swiss emits the AndroidManifest
+# <uses-permission> lines + iOS Info.plist usage keys (→ .swiss/permissions/),
+# to be merged into the mobile app manifest. (The app must ALSO request each at
+# runtime via swiss_request(...) — both are required.)
+gen_permissions() {
+  [ -f swiss.json ] || return 0
+  mkdir -p .swiss/permissions
+  node -e '
+    const j = JSON.parse(require("fs").readFileSync("swiss.json","utf8"));
+    const perms = j.permissions || [];
+    const AND = { location:"ACCESS_FINE_LOCATION", camera:"CAMERA", microphone:"RECORD_AUDIO",
+      storage:"READ_EXTERNAL_STORAGE", notifications:"POST_NOTIFICATIONS", contacts:"READ_CONTACTS",
+      activity:"ACTIVITY_RECOGNITION", bluetooth:"BLUETOOTH_CONNECT", background:"FOREGROUND_SERVICE" };
+    const IOS = { location:"NSLocationWhenInUseUsageDescription", camera:"NSCameraUsageDescription",
+      microphone:"NSMicrophoneUsageDescription", contacts:"NSContactsUsageDescription",
+      activity:"NSMotionUsageDescription", bluetooth:"NSBluetoothAlwaysUsageDescription" };
+    const fs = require("fs");
+    const xml = perms.map(p => AND[p] ? `  <uses-permission android:name="android.permission.${AND[p]}"/>` : `  <!-- unknown permission: ${p} -->`).join("\n");
+    fs.writeFileSync(".swiss/permissions/android-manifest.xml", xml + "\n");
+    let plist = perms.map(p => IOS[p] ? `  <key>${IOS[p]}</key>\n  <string>${j.name||"This app"} needs ${p} access.</string>` : "").filter(Boolean).join("\n");
+    if (perms.includes("background")) plist += `\n  <key>UIBackgroundModes</key>\n  <array><string>processing</string><string>location</string></array>`;
+    fs.writeFileSync(".swiss/permissions/ios-info.plist", plist + "\n");
+    if (perms.length) console.error("swiss: permissions ["+perms.join(", ")+"] -> .swiss/permissions/ (request them at runtime too)");
+  ' 2>&1 || true
+}
+
 build_backend() {
   [ -f swiss.json ] || die "no swiss.json — run inside a Swiss project"
   have ezy || die "ezy not found on PATH (build the EzyLang compiler first)"
   [ -d "$LIB" ] && copy_runtime src/swiss   # self-heal stale project runtime
+  gen_permissions
   echo "swiss: compiling backend → wasm (ESM)"
   # compile every .ez in backend/ to an ESM wasm module under src/
   for ez in backend/*.ez; do
@@ -435,6 +488,7 @@ cmd_build() {
       *) shift ;;
     esac
   done
+  gen_permissions   # swiss.json permissions -> .swiss/permissions/ manifest fragments
   case "$platform" in
     web) build_backend
          have npx || die "npx not found (install Node.js)"
@@ -461,6 +515,7 @@ case "$1" in
   build)   shift; cmd_build "$@" ;;
   package) shift; cmd_package "$@" ;;
   dev)     cmd_dev ;;
+  perms)   gen_permissions; cat .swiss/permissions/android-manifest.xml 2>/dev/null ;;
   *)
     echo "swiss — one React frontend + Ezy backend, many targets"
     echo "usage:"

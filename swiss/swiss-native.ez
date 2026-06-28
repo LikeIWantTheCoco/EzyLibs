@@ -1,0 +1,89 @@
+# ═══════════════════════════════════════════════════════════════
+#  swiss-native — the ONE native API for Swiss apps (backend / Ezy side).
+#
+#  This is the only sanctioned way a Swiss app touches the device: files &
+#  paths, file pickers, notifications, clipboard, brightness, battery, screen,
+#  permissions, GPS, motion sensors, and background tasks. It is a thin facade
+#  over the `os` library family — import it in your backend and call swiss_*:
+#
+#    import "swiss-native.ez"
+#    fn on_save():
+#    {
+#        p = swiss_save_dialog("Save report", "report.txt")
+#        if p.len() > 0: { swiss_write(p, "...") ; swiss_notify("Saved", p) }
+#    }
+#
+#  On native targets (linux/windows/macos/android/ios) these map to the os
+#  libs; on the `web` target Swiss maps the same names to browser APIs
+#  (swiss-native.js). Mobile capabilities are permission-gated — call
+#  swiss_request(...) first (see below).
+# ═══════════════════════════════════════════════════════════════
+
+import "os"               # paths + filesystem
+import "os_ui"            # dialogs / file pickers
+import "os_notify"        # notifications
+import "os_clipboard"     # clipboard
+import "os_screen"        # screen size / screenshot
+import "os_open"          # open with default app
+import "os_power"         # battery / AC
+import "os_brightness"    # screen brightness
+import "os_permissions"   # runtime permissions (the gate for the rest)
+import "os_gps"           # location
+import "os_sensors"       # accelerometer / gyroscope / steps
+import "os_background"    # background tasks
+
+# ── permissions (call before GPS / sensors / background on mobile) ──
+fn swiss_request(name: string) -> int: { return os_perm_request(name) }
+fn swiss_has(name: string) -> int:     { return os_perm_check(name) }
+
+# ── files & paths ──
+fn swiss_read(path: string) -> string:               { return os_read(path) }
+fn swiss_write(path: string, text: string) -> int:   { return os_write(path, text) }
+fn swiss_append(path: string, text: string) -> int:  { return os_append(path, text) }
+fn swiss_exists(path: string) -> int:                { return os_exists(path) }
+fn swiss_home() -> string:                           { return os_homedir() }
+fn swiss_tmp() -> string:                            { return os_tmpdir() }
+fn swiss_path_join(a: string, b: string) -> string:  { return os_path_join(a, b) }
+fn swiss_basename(p: string) -> string:              { return os_basename(p) }
+fn swiss_dirname(p: string) -> string:               { return os_dirname(p) }
+
+# ── dialogs / pickers ──
+fn swiss_open_dialog(title: string, filter: string) -> string: { return os_ui_open_file(title, filter) }
+fn swiss_save_dialog(title: string, name: string) -> string:   { return os_ui_save_file(title, name) }
+fn swiss_pick_folder(title: string) -> string:                 { return os_ui_pick_folder(title) }
+fn swiss_alert(title: string, text: string) -> int:            { return os_ui_message(title, text) }
+fn swiss_confirm(title: string, text: string) -> int:          { return os_ui_confirm(title, text) }
+fn swiss_prompt(title: string, msg: string, deflt: string) -> string: { return os_ui_input(title, msg, deflt) }
+
+# ── system ──
+fn swiss_notify(title: string, body: string) -> int: { return os_notify(title, body) }
+fn swiss_clip_set(text: string) -> int:              { return os_clip_set(text) }
+fn swiss_clip_get() -> string:                       { return os_clip_get() }
+fn swiss_open_url(url: string) -> int:               { return os_open(url) }
+fn swiss_battery() -> int:                           { return os_battery_percent() }
+fn swiss_on_ac() -> int:                             { return os_on_ac() }
+fn swiss_brightness() -> int:                        { return os_brightness_get() }
+fn swiss_set_brightness(pct: int) -> int:            { return os_brightness_set(pct) }
+fn swiss_screen_w() -> int:                          { return os_screen_width() }
+fn swiss_screen_h() -> int:                          { return os_screen_height() }
+
+# ── location (needs swiss_request("location")) ──
+fn swiss_gps_ready() -> int:        { return os_gps_available() }
+fn swiss_gps_lat() -> float:        { return os_gps_lat() }
+fn swiss_gps_lon() -> float:        { return os_gps_lon() }
+fn swiss_location() -> string:      { return os_gps_location() }
+
+# ── motion sensors (steps need swiss_request("activity")) ──
+fn swiss_sensors_ready() -> int: { return os_sensors_available() }
+fn swiss_accel_x() -> float:     { return os_accel_x() }
+fn swiss_accel_y() -> float:     { return os_accel_y() }
+fn swiss_accel_z() -> float:     { return os_accel_z() }
+fn swiss_gyro_x() -> float:      { return os_gyro_x() }
+fn swiss_gyro_y() -> float:      { return os_gyro_y() }
+fn swiss_gyro_z() -> float:      { return os_gyro_z() }
+fn swiss_steps() -> int:         { return os_steps() }
+
+# ── background tasks (mobile: pair with swiss_request("background")) ──
+fn swiss_bg_run(cb: fn()) -> int:            { return os_bg_run(cb) }
+fn swiss_bg_every(ms: int, cb: fn()) -> int: { return os_bg_every(ms, cb) }
+fn swiss_bg_stop(id: int) -> int:            { return os_bg_stop(id) }

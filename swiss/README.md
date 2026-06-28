@@ -115,3 +115,58 @@ port to native widget props later. `View` defaults to a flex column.
 v0.1 — web target end-to-end (reconciler verified under jsdom; bridge verified
 against a real Ezy wasm build). Native HostConfigs (GTK first) are the next
 milestone.
+
+## Native device access (the `os` layer)
+
+Device access — files & paths, file pickers, notifications, clipboard,
+brightness, battery, screen, **permissions, GPS, motion sensors, background
+tasks** — goes through **one** API, the `os` library family. This is the only
+sanctioned way; don't shell out or call platform APIs directly from an app.
+
+**Native targets (desktop/mobile)** — in your Ezy backend:
+
+```ezy
+import "swiss-native.ez"          # the facade over the os libs (auto-links them)
+
+fn save(text: string) -> int:
+{
+    p = swiss_save_dialog("Save", "note.txt")
+    if p.len() == 0: { return 0 }
+    swiss_write(p, text) ; swiss_notify("Saved", p) ; return 1
+}
+fn locate() -> string:            # permission-gated
+{
+    if swiss_request("location") == 0: { return "" }
+    return swiss_location()
+}
+```
+
+**Web target** — the same surface from JS (native C libs aren't in wasm):
+
+```js
+import { native } from 'swiss';
+await native.request('notifications');
+native.notify('Hi', 'from the web');
+const loc = await native.location();
+```
+
+### Permissions — declare them twice
+
+Every permission an app uses must be declared in **both** places:
+
+1. **`swiss.json` `"permissions"`** — build-time. `swiss build` emits the
+   platform manifests from this (`.swiss/permissions/android-manifest.xml`
+   `<uses-permission>` + `ios-info.plist` usage keys / `UIBackgroundModes`).
+   Preview with `swiss perms`.
+2. **At runtime** — `swiss_request("location")` (backend) or
+   `native.request('location')` (web), before using the capability.
+
+```json
+// swiss.json
+{ "permissions": ["location", "activity", "background", "notifications"] }
+```
+
+Names: `location camera microphone storage notifications contacts activity
+bluetooth background`. On desktop everything is granted (no runtime model);
+mobile shows the system prompt. Background work (`swiss_bg_every`, …) needs the
+`"background"` permission on mobile.
