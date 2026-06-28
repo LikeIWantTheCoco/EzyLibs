@@ -6,5 +6,6 @@
   "sources":      ["os_notify.c"],
   "header":       "os_notify.ez",
   "binary":       "libos_notify.so",
-  "extends":      "os"
+  "extends":      "os",
+  "link_flags_windows": ["-lshell32", "-luser32"]
 }

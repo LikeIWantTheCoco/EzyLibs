@@ -29,6 +29,27 @@
   #define NT_LINUX 1
 #endif
 
+#ifdef NT_WINDOWS
+#include <windows.h>
+#include <shellapi.h>
+static HWND nt_hwnd = NULL;
+static NOTIFYICONDATA nt_nid;
+static int nt_init = 0;
+/* one persistent tray icon for the process; balloons are NIM_MODIFY on it */
+static int nt_setup(void) {
+    if (nt_init) return 1;
+    WNDCLASS wc; memset(&wc, 0, sizeof wc);
+    wc.lpfnWndProc = DefWindowProc; wc.hInstance = GetModuleHandle(NULL); wc.lpszClassName = "EzyNotifyWnd";
+    RegisterClass(&wc);
+    nt_hwnd = CreateWindow("EzyNotifyWnd", "", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, wc.hInstance, NULL);
+    memset(&nt_nid, 0, sizeof nt_nid);
+    nt_nid.cbSize = sizeof nt_nid; nt_nid.hWnd = nt_hwnd; nt_nid.uID = 1;
+    nt_nid.uFlags = NIF_ICON; nt_nid.hIcon = LoadIcon(NULL, IDI_INFORMATION);
+    if (!Shell_NotifyIcon(NIM_ADD, &nt_nid)) return 0;
+    nt_init = 1; return 1;
+}
+#endif
+
 #if defined(NT_LINUX) || defined(NT_MACOS)
 static void sh_quote(char *out, size_t cap, const char *in) {
     size_t o = strlen(out);
@@ -58,8 +79,16 @@ long long os_notify_full(const char *title, const char *body, const char *urgenc
     snprintf(cmd, sizeof cmd, "osascript -e 'display notification \"%s\" with title \"%s\"' >/dev/null 2>&1",
              body ? body : "", title && *title ? title : "Notification");
     return system(cmd) == 0 ? 1 : 0;
+#elif defined(NT_WINDOWS)
+    (void)urgency;
+    if (!nt_setup()) return 0;
+    nt_nid.uFlags = NIF_INFO;
+    strncpy(nt_nid.szInfoTitle, title && *title ? title : "Notification", sizeof nt_nid.szInfoTitle - 1);
+    strncpy(nt_nid.szInfo, body ? body : "", sizeof nt_nid.szInfo - 1);
+    nt_nid.dwInfoFlags = NIIF_INFO;
+    return Shell_NotifyIcon(NIM_MODIFY, &nt_nid) ? 1 : 0;
 #else
-    (void)title; (void)body; (void)urgency; return 0;   /* windows/mobile: reserved */
+    (void)title; (void)body; (void)urgency; return 0;   /* mobile: reserved */
 #endif
 }
 
