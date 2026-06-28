@@ -1,0 +1,24 @@
+# ── os_tray: system tray icon with menu (extends os) ──────────
+# Stateful + needs an event loop. Menu callbacks are Ezy `fn()` values
+# (lambdas/functions; no closures — see the lang spec).
+#
+#   import "os_tray"
+#   fn quit():  { os_tray_quit() }
+#   fn hello(): { os_notify("Tray", "clicked!") }   # if os_notify imported
+#   fn main():
+#   {
+#       os_tray_init("application-x-executable", "My Ezy app")
+#       os_tray_add_item("Say hi", hello)
+#       os_tray_add_item("Quit",   quit)
+#       os_tray_run()      # blocks until quit
+#   }
+#
+# Backends: GTK3 GtkStatusIcon (linux), Shell_NotifyIcon (windows).
+# macos (NSStatusItem) and mobile are reserved.
+
+extern fn os_tray_init(icon: string, tooltip: string) -> int
+extern fn os_tray_add_item(label: string, callback: fn()) -> int
+extern fn os_tray_set_tooltip(text: string) -> int
+extern fn os_tray_run() -> int        # blocking event loop
+extern fn os_tray_quit() -> int       # stop the loop
+extern fn os_tray_version() -> string
