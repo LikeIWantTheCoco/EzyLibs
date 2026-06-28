@@ -565,8 +565,9 @@ function emit(ast, opts) {
       if (raw == null) continue;
       const s = String(raw);
       if (k === 'padding') o.padding = num(s);
-      else if (k === 'margin') { if (/auto/.test(s)) o.alignItems = 'center'; else o.margin = num(s); }
-      else if (k === 'width') { if (s === '100%') o.flex = 1; else o.width = num(s); }
+      else if (k === 'margin') { if (/auto/.test(s)) o.alignSelf = 'center'; else o.margin = num(s); }
+      else if (k === 'alignSelf') o.alignSelf = s;
+      else if (k === 'width') { if (s === '100%') { /* fill cross-axis (stretch handles it) */ } else o.width = num(s); }
       else if (k === 'maxWidth' || k === 'minWidth') o.width = num(s);
       else if (k === 'height' || k === 'maxHeight' || k === 'minHeight') o.height = num(s);
       else if (k === 'flex' || k === 'flexGrow') o.flex = num(s);
@@ -627,7 +628,8 @@ function emit(ast, opts) {
     const ALIGN = { center: 1, 'flex-end': 2, end: 2, stretch: 3, start: 0, 'flex-start': 0 };
     const align = st && ALIGN[st.alignItems] != null ? ALIGN[st.alignItems] : (dir === 0 ? 3 : 0); // column default stretch
     const justify = st && ALIGN[st.justifyContent] != null ? ALIGN[st.justifyContent] : 0;
-    return { dir, pad, gap, w, h, flex, align, justify };
+    const selfalign = st && ALIGN[st.alignSelf] != null && ALIGN[st.alignSelf] !== 3 ? ALIGN[st.alignSelf] : 0; // self-align in parent (margin auto / alignSelf)
+    return { dir, pad, gap, w, h, flex, align, justify, selfalign };
   }
   // apply font + text color to a freshly created control hwnd expr
   function applyControl(hw, st, kind) {
@@ -684,6 +686,7 @@ function emit(ast, opts) {
     if (HSIZE[tag]) st = Object.assign({ fontSize: HSIZE[tag], fontWeight: 'bold' }, st || {});
     const na = nodeArgs(st);
     const mkNode = (hw) => `swiss_leaf(${hw}, ${na.w}, ${na.h}, ${na.flex})`;
+    const selfStep = (nv) => { if (na.selfalign) out.build.push(`  ${nv}->selfalign = ${na.selfalign};`); };
     const pack = (nodeExpr) => { if (parent) out.build.push(`  swiss_add(${parent}, ${nodeExpr});`); };
     const dyn = planDynVisible; // (handled in buildCond)
 
@@ -694,7 +697,7 @@ function emit(ast, opts) {
       if (bg) out.build.push(`  ${v}->bg = ${bg}; ${v}->hasbg = 1;`);
       const childScope = tag === 'form' && a.onSubmit ? { ...scope, __form: a.onSubmit } : scope;
       buildChildren(el.children, v, childScope);
-      pack(v); return v;
+      selfStep(v); pack(v); return v;
     }
     if (name === 'ScrollView') {  // no native scroll in v0.1 → plain column
       const v = vid('v');
@@ -709,7 +712,7 @@ function emit(ast, opts) {
           const hw = ctl('"STATIC"', 'SS_LEFT', 'NULL', 'text');
           out.build.push(`  ${textSnippet(el, scope, hw).snippet}`);
           applyControl(hw, st, 'text'); const n = vid('n');
-          out.build.push(`  Node* ${n} = ${mkNode(hw)};`); pack(n); return n;
+          out.build.push(`  Node* ${n} = ${mkNode(hw)};`); selfStep(n); pack(n); return n;
         }
         const f = vid('lbl'); stateFields.push(`  HWND ${f};`);
         out.build.push(`  s->${f} = CreateWindowExA(0, "STATIC", NULL, WS_CHILD | WS_VISIBLE | SS_LEFT, 0, 0, 0, 0, g_main, NULL, g_hinst, NULL);`);
@@ -717,11 +720,11 @@ function emit(ast, opts) {
         out.build.push(`  ${real.snippet}`);
         info.reads.forEach((cn) => deps[cn].push(real.snippet));
         applyControl(`s->${f}`, st, 'text');
-        const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(`s->${f}`)};`); pack(n); return n;
+        const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(`s->${f}`)};`); selfStep(n); pack(n); return n;
       }
       const hw = ctl('"STATIC"', 'SS_LEFT', cstr(info.staticText), 'text');
       applyControl(hw, st, 'text');
-      const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(hw)};`); pack(n); return n;
+      const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(hw)};`); selfStep(n); pack(n); return n;
     }
     if (name === 'Button') {
       let label = '', dynTitle = null;
@@ -750,7 +753,7 @@ function emit(ast, opts) {
         out.build.push(`  ${snip}`); if (!scope.__inrow) cellsIn(a.disabled.expression).forEach((cn) => deps[cn].push(snip));
       }
       applyControl(hw, st, 'btn');
-      const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(hw)};`); pack(n); return n;
+      const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(hw)};`); selfStep(n); pack(n); return n;
     }
     if (name === 'Input') {
       const f = vid('ent'); stateFields.push(`  HWND ${f};`);
@@ -777,8 +780,8 @@ function emit(ast, opts) {
         deps[cell.name].push(`{ char* _t = swiss_gettext(s->${f}); if (strcmp(_t, s->${cell.name}) != 0) SetWindowTextA(s->${f}, s->${cell.name}); free(_t); }`);
       }
       applyControl(`s->${f}`, st, 'edit');
-      const nh = na.h < 0 ? 24 : na.h, nw = na.w < 0 ? 180 : na.w;
-      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${nw}, ${nh}, ${na.flex});`); pack(n); return n;
+      const nh = na.h < 0 ? 24 : na.h;   // width auto (-1) → fills a stretch parent; measure gives a natural fallback
+      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w}, ${nh}, ${na.flex});`); selfStep(n); pack(n); return n;
     }
     if (name === 'TextArea') {
       const f = vid('ta'); stateFields.push(`  HWND ${f};`);
@@ -796,8 +799,8 @@ function emit(ast, opts) {
         deps[cell.name].push(`{ char* _t = swiss_gettext(s->${f}); if (strcmp(_t, s->${cell.name}) != 0) SetWindowTextA(s->${f}, s->${cell.name}); free(_t); }`);
       }
       applyControl(`s->${f}`, st, 'edit');
-      const nh = na.h < 0 ? 80 : na.h, nw = na.w < 0 ? 240 : na.w;
-      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${nw}, ${nh}, ${na.flex || 1});`); pack(n); return n;
+      const nh = na.h < 0 ? 80 : na.h;
+      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w}, ${nh}, ${na.flex || 1});`); selfStep(n); pack(n); return n;
     }
     if (name === 'Checkbox' || name === 'Switch') {
       const f = vid('chk'); stateFields.push(`  HWND ${f};`);
@@ -809,7 +812,7 @@ function emit(ast, opts) {
         deps[cell.name].push(`SendMessageA(s->${f}, BM_SETCHECK, s->${cell.name} ? BST_CHECKED : BST_UNCHECKED, 0);`);
       }
       applyControl(`s->${f}`, st, 'text');
-      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w}, ${na.h < 0 ? 22 : na.h}, ${na.flex});`); pack(n); return n;
+      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w}, ${na.h < 0 ? 22 : na.h}, ${na.flex});`); selfStep(n); pack(n); return n;
     }
     if (name === 'Select') {
       const f = vid('cmb'); stateFields.push(`  HWND ${f};`);
@@ -822,7 +825,7 @@ function emit(ast, opts) {
         out.build.push(`  SendMessageA(s->${f}, CB_SETCURSEL, s->${cell.name}, 0);`);
         deps[cell.name].push(`if (SendMessageA(s->${f}, CB_GETCURSEL, 0, 0) != s->${cell.name}) SendMessageA(s->${f}, CB_SETCURSEL, s->${cell.name}, 0);`);
       }
-      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w < 0 ? 160 : na.w}, ${na.h < 0 ? 24 : na.h}, ${na.flex});`); pack(n); return n;
+      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w}, ${na.h < 0 ? 24 : na.h}, ${na.flex});`); selfStep(n); pack(n); return n;
     }
     if (name === 'Slider') {
       const f = vid('sl'); stateFields.push(`  HWND ${f};`);
@@ -836,7 +839,7 @@ function emit(ast, opts) {
         deps[cell.name].push(`if ((long long)SendMessageA(s->${f}, TBM_GETPOS, 0, 0) != s->${cell.name}) SendMessageA(s->${f}, TBM_SETPOS, TRUE, s->${cell.name});`);
       }
       if (a.onChange) { const cb = emitHandler(a.onChange, scope, 'range'); out.build.push(`  swiss_track(s->${f}, ${cb});`); }
-      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w < 0 ? 200 : na.w}, ${na.h < 0 ? 28 : na.h}, ${na.flex});`); pack(n); return n;
+      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w}, ${na.h < 0 ? 28 : na.h}, ${na.flex});`); selfStep(n); pack(n); return n;
     }
     if (name === 'ProgressBar') {
       const f = vid('pb'); stateFields.push(`  HWND ${f};`);
@@ -848,17 +851,17 @@ function emit(ast, opts) {
         const setf = `SendMessageA(s->${f}, PBM_SETPOS, (WPARAM)s->${cell.name}, 0);`;
         out.build.push(`  ${setf}`); deps[cell.name].push(setf);
       }
-      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w < 0 ? 200 : na.w}, ${na.h < 0 ? 22 : na.h}, ${na.flex});`); pack(n); return n;
+      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w}, ${na.h < 0 ? 22 : na.h}, ${na.flex});`); selfStep(n); pack(n); return n;
     }
     if (name === 'Separator') {
       const hw = ctl('"STATIC"', 'SS_ETCHEDHORZ', 'NULL', 'other');
-      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(${hw}, ${na.w}, ${na.h < 0 ? 2 : na.h}, ${na.flex});`); pack(n); return n;
+      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(${hw}, ${na.w}, ${na.h < 0 ? 2 : na.h}, ${na.flex});`); selfStep(n); pack(n); return n;
     }
     if (name === 'Image') {
       const f = vid('img');
       out.build.push(`  HWND ${f} = CreateWindowExA(0, "STATIC", NULL, WS_CHILD | WS_VISIBLE | SS_BITMAP | SS_REALSIZECONTROL, 0, 0, 0, 0, g_main, NULL, g_hinst, NULL);`);
       out.build.push(`  swiss_set_image(${f}, ${cstr(strAttr(a.src))});`);
-      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(${f}, ${na.w < 0 ? 120 : na.w}, ${na.h < 0 ? 120 : na.h}, ${na.flex});`); pack(n); return n;
+      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(${f}, ${na.w < 0 ? 120 : na.w}, ${na.h < 0 ? 120 : na.h}, ${na.flex});`); selfStep(n); pack(n); return n;
     }
     if (name === 'List') {
       const countExpr = a.count.expression;
@@ -1101,6 +1104,7 @@ typedef struct Node {
   int dir, pad, gap;         // dir: 0=column 1=row
   int w, h, flex;            // requested size (-1 auto) + main-axis grow factor
   int justify, align;        // main / cross alignment (0 start 1 center 2 end 3 stretch)
+  int selfalign;             // self cross-align in parent (0 inherit, 1 center, 2 end) — margin auto / alignSelf
   COLORREF bg; int hasbg, visible;
 } Node;
 
@@ -1176,11 +1180,16 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
     int cm = n->dir ? cw : ch, cc = n->dir ? ch : cw;
     if (c->flex && totflex) cm += extra * c->flex / totflex;
     int crossSpace = n->dir ? ih : iw;
+    int hasCross = n->dir ? (c->h >= 0) : (c->w >= 0);  // explicit cross size set?
     int co; // cross-axis offset within crossSpace
-    if (c->align == 3 || n->align == 3) { cc = crossSpace; co = 0; }
-    else if (n->align == 1) co = (crossSpace - cc) / 2;
+    if (c->selfalign) {                                  // self-align overrides parent (margin auto / alignSelf)
+      co = c->selfalign == 1 ? (crossSpace - cc) / 2 : crossSpace - cc;
+    } else if (!hasCross && (c->align == 3 || n->align == 3)) {  // stretch only if no explicit cross size
+      cc = crossSpace; co = 0;
+    } else if (n->align == 1) co = (crossSpace - cc) / 2;
     else if (n->align == 2) co = crossSpace - cc;
     else co = 0;
+    if (co < 0) co = 0;
     if (n->dir) swiss_arrange(c, cursor, iy + co, cm, cc);
     else        swiss_arrange(c, ix + co, cursor, cc, cm);
     cursor += cm + n->gap;
@@ -1190,7 +1199,13 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
 static void swiss_relayout(void) {
   if (!g_root || !g_main) return;
   RECT rc; GetClientRect(g_main, &rc);
-  swiss_arrange(g_root, 0, 0, rc.right - rc.left, rc.bottom - rc.top);
+  int W = rc.right - rc.left, H = rc.bottom - rc.top;
+  // honor the root's own width/height (e.g. maxWidth) + self-align (margin auto)
+  int rw = (g_root->w >= 0 && g_root->w < W) ? g_root->w : W;
+  int rh = (g_root->h >= 0 && g_root->h < H) ? g_root->h : H;
+  int rx = 0;
+  if (rw < W) { if (g_root->selfalign == 1) rx = (W - rw) / 2; else if (g_root->selfalign == 2) rx = W - rw; }
+  swiss_arrange(g_root, rx, 0, rw, rh);
 }
 
 // ── font cache (size 0 = default UI size) ──
