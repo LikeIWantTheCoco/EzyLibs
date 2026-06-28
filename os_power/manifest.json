@@ -1,0 +1,10 @@
+{
+  "name":         "os_power",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "Battery and AC power info (sysfs/pmset/GetSystemPowerStatus) — extends os",
+  "sources":      ["os_power.c"],
+  "header":       "os_power.ez",
+  "binary":       "libos_power.so",
+  "extends":      "os"
+}

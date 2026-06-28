@@ -1,0 +1,13 @@
+# ── os_power: battery / AC power info (extends os) ─────────────
+#   import "os_power"
+#   fn main():
+#   {
+#       print(os_battery_percent(), "%", os_battery_status())
+#       if os_on_ac() == 1: { print("plugged in") }
+#   }
+
+extern fn os_battery_percent() -> int      # 0-100, or -1 if no battery/unknown
+extern fn os_on_ac() -> int                # 1 AC / 0 battery / -1 unknown
+extern fn os_battery_status() -> string    # "Charging"/"Discharging"/"Full"/"Unknown"
+extern fn os_battery_charging() -> int     # 1 if charging
+extern fn os_power_version() -> string
