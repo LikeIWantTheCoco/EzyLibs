@@ -763,9 +763,14 @@ function emit(ast, opts) {
       if (!press && isSubmit) press = scope.__form;
       const id = press ? command(emitHandler(press, scope, 'click'), 'BN_CLICKED') : 0;
       const hw = vid('w');
-      // a submit button is the form's default → Enter triggers it (IsDialogMessage)
-      const bstyle = isSubmit ? 'BS_DEFPUSHBUTTON' : 'BS_PUSHBUTTON';
+      // a styled button (backgroundColor/color) is owner-drawn so it can honor
+      // those colors (native Win32 buttons ignore them); plain buttons stay
+      // native (themed v6). A submit button is the form default (Enter triggers).
+      const bgCol = colorref(st && st.backgroundColor), fgCol = colorref(st && st.color);
+      const owner = bgCol || fgCol;
+      const bstyle = owner ? 'BS_OWNERDRAW' : isSubmit ? 'BS_DEFPUSHBUTTON' : 'BS_PUSHBUTTON';
       out.build.push(`  HWND ${hw} = CreateWindowExA(0, "BUTTON", ${cstr(label)}, WS_CHILD | WS_VISIBLE | ${bstyle} | WS_TABSTOP, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
+      if (owner) out.build.push(`  swiss_btn_style(${hw}, ${bgCol || '0'}, ${bgCol ? 1 : 0}, ${fgCol || '0'}, ${fgCol ? 1 : 0}, ${na.radius});`);
       if (scope.__index) out.build.push(`  SetWindowLongPtrA(${hw}, GWLP_USERDATA, (LONG_PTR)${scope.__index.c});`);
       if (dynTitle) {
         const tv = cexpr(dynTitle, scope);
@@ -1272,6 +1277,34 @@ static struct { HWND w; COLORREF c; } g_colors[128]; static int g_ncolors;
 static void swiss_set_color(HWND w, COLORREF c) { if (g_ncolors < 128) { g_colors[g_ncolors].w = w; g_colors[g_ncolors].c = c; g_ncolors++; } }
 static int swiss_get_color(HWND w, COLORREF* out) { for (int i = 0; i < g_ncolors; i++) if (g_colors[i].w == w) { *out = g_colors[i].c; return 1; } return 0; }
 
+static HBRUSH g_white;   // window/control background (web-like white)
+
+// ── owner-drawn buttons (native Win32 buttons ignore backgroundColor/color) ──
+static struct { HWND w; COLORREF bg, fg; int radius, hasbg, hasfg; } g_btns[64]; static int g_nbtns;
+static void swiss_btn_style(HWND w, COLORREF bg, int hasbg, COLORREF fg, int hasfg, int radius) {
+  if (g_nbtns < 64) { g_btns[g_nbtns].w = w; g_btns[g_nbtns].bg = bg; g_btns[g_nbtns].hasbg = hasbg;
+    g_btns[g_nbtns].fg = fg; g_btns[g_nbtns].hasfg = hasfg; g_btns[g_nbtns].radius = radius; g_nbtns++; }
+}
+static COLORREF swiss_darken(COLORREF c, int pct) { return RGB(GetRValue(c)*pct/100, GetGValue(c)*pct/100, GetBValue(c)*pct/100); }
+static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
+  for (int i = 0; i < g_nbtns; i++) if (g_btns[i].w == d->hwndItem) {
+    COLORREF bg = g_btns[i].hasbg ? g_btns[i].bg : GetSysColor(COLOR_BTNFACE);
+    if (d->itemState & ODS_SELECTED) bg = swiss_darken(bg, 85);          // pressed
+    else if (d->itemState & ODS_HOTLIGHT) bg = swiss_darken(bg, 92);     // hover
+    HBRUSH br = CreateSolidBrush(bg);
+    FillRect(d->hDC, &d->rcItem, br); DeleteObject(br);                  // window region rounds the corners
+    SetBkMode(d->hDC, TRANSPARENT);
+    SetTextColor(d->hDC, g_btns[i].hasfg ? g_btns[i].fg : GetSysColor(COLOR_BTNTEXT));
+    HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0);
+    HGDIOBJ of = f ? SelectObject(d->hDC, f) : NULL;
+    char buf[256]; GetWindowTextA(d->hwndItem, buf, sizeof buf);
+    DrawTextA(d->hDC, buf, -1, &d->rcItem, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (of) SelectObject(d->hDC, of);
+    return 1;
+  }
+  return 0;
+}
+
 typedef struct {
 ${cells.map((c) => `  ${c.ctype} ${c.name};`).join('\n') || '  int _u;'}
 ${refs.map((r) => `  ${r.ctype} ${r.name}__current;`).join('\n')}
@@ -1364,6 +1397,10 @@ static LRESULT CALLBACK swiss_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 ${cmdCases || '      break;'}
       break;
     }
+    case WM_DRAWITEM: {
+      if (swiss_btn_draw((LPDRAWITEMSTRUCT)lp)) return TRUE;
+      break;
+    }
     case WM_HSCROLL: {
       for (int i = 0; i < g_ntracks; i++) if (g_tracks[i].w == (HWND)lp) { g_tracks[i].cb(&S, (HWND)lp); break; }
       return 0;
@@ -1374,8 +1411,8 @@ ${cmdCases || '      break;'}
     }
     case WM_CTLCOLORSTATIC: case WM_CTLCOLORBTN: {
       COLORREF col; HDC dc = (HDC)wp;
-      if (swiss_get_color((HWND)lp, &col)) { SetTextColor(dc, col); SetBkMode(dc, TRANSPARENT); return (LRESULT)GetSysColorBrush(COLOR_3DFACE); }
-      SetBkMode(dc, TRANSPARENT); return (LRESULT)GetSysColorBrush(COLOR_3DFACE);
+      if (swiss_get_color((HWND)lp, &col)) SetTextColor(dc, col);
+      SetBkMode(dc, TRANSPARENT); return (LRESULT)g_white;   // white background (web-like)
     }
     case WM_SIZE: swiss_relayout(); return 0;
     case WM_DESTROY: PostQuitMessage(0); return 0;
@@ -1392,7 +1429,8 @@ ${refs.map((r) => `  S.${r.name}__current = ${r.cinit};`).join('\n')}
   swiss_init(&S);
   WNDCLASSA wc; memset(&wc, 0, sizeof wc);
   wc.lpfnWndProc = swiss_wndproc; wc.hInstance = hi; wc.lpszClassName = "SwissWindow";
-  wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+  g_white = CreateSolidBrush(RGB(255, 255, 255));
+  wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = g_white;
   RegisterClassA(&wc);
   g_main = CreateWindowExA(0, "SwissWindow", ${cstr(opts.title || 'Swiss')},
     WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 960, 640, NULL, NULL, hi, NULL);
