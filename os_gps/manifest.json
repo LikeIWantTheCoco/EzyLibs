@@ -1,0 +1,11 @@
+{
+  "name":         "os_gps",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "Device location via JNI LocationManager (Android) — extends os, needs os_permissions",
+  "sources":      ["os_gps.c"],
+  "header":       "os_gps.ez",
+  "binary":       "libos_gps.so",
+  "extends":      "os",
+  "dependencies": ["os_permissions"]
+}

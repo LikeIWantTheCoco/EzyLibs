@@ -1,0 +1,22 @@
+# ── os_sensors: accelerometer / gyroscope (extends os) ────────
+# Android only (NDK native sensors). Accelerometer/gyro need no runtime
+# permission; for step/activity request "activity" via os_permissions.
+# iOS (CoreMotion) and desktop reserved.
+#
+#   import "os_sensors"
+#   fn main():
+#   {
+#       if os_sensors_available() == 1:
+#       {
+#           print("accel:", os_accel_x(), os_accel_y(), os_accel_z())
+#       }
+#   }
+
+extern fn os_sensors_available() -> int
+extern fn os_accel_x() -> float      # m/s^2
+extern fn os_accel_y() -> float
+extern fn os_accel_z() -> float
+extern fn os_gyro_x() -> float       # rad/s
+extern fn os_gyro_y() -> float
+extern fn os_gyro_z() -> float
+extern fn os_sensors_version() -> string

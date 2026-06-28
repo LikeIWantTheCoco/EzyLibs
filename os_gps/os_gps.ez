@@ -1,0 +1,20 @@
+# ── os_gps: device location (extends os) ──────────────────────
+# Android only for now (JNI LocationManager). Request the permission via
+# os_permissions FIRST — os_gps does not ask for it. iOS (CoreLocation) and
+# desktop reserved.
+#
+#   import "os_permissions"
+#   import "os_gps"
+#   fn main():
+#   {
+#       if os_perm_request("location") == 1:
+#       {
+#           if os_gps_available() == 1: { print(os_gps_location()) }
+#       }
+#   }
+
+extern fn os_gps_available() -> int
+extern fn os_gps_lat() -> float
+extern fn os_gps_lon() -> float
+extern fn os_gps_location() -> string    # "lat,lon" or ""
+extern fn os_gps_version() -> string

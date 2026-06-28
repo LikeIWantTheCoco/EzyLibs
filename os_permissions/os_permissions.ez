@@ -1,0 +1,27 @@
+# ── os_permissions: runtime permissions for Ezy (extends os) ──
+# The ONE permission lib. Other capability libs (os_gps, os_sensors, …)
+# don't ask for permissions themselves — your code requests here first:
+#
+#   import "os_permissions"
+#   import "os_gps"
+#   fn main():
+#   {
+#       if os_perm_request("location") == 1:
+#       {
+#           print(os_gps_location())
+#       }
+#   }
+#
+# Names: location, camera, microphone, storage, notifications, contacts,
+# activity, bluetooth (or a full "android.permission.X"). On desktop every
+# permission reports granted (no runtime model). iOS reserved.
+
+extern fn os_perm_check(name: string) -> int     # 1 granted / 0 not
+extern fn os_perm_request(name: string) -> int   # prompt; async on Android (re-check)
+extern fn os_perm_status(name: string) -> string # "granted"/"denied"/"unsupported"
+extern fn os_permissions_version() -> string
+
+# Note: the Android host (e.g. swiss) calls the exported C symbol
+# os_android_set_context(JNIEnv*, jobject Activity) once at startup from its
+# native glue so permission/location prompts have a context. It is not called
+# from Ezy code, so it is not declared here.

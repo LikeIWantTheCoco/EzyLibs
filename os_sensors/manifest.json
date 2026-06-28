@@ -1,0 +1,11 @@
+{
+  "name":         "os_sensors",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "Accelerometer/gyroscope via NDK native sensors (Android) — extends os",
+  "sources":      ["os_sensors.c"],
+  "header":       "os_sensors.ez",
+  "binary":       "libos_sensors.so",
+  "extends":      "os",
+  "link_flags_android": ["-landroid"]
+}
