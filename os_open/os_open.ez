@@ -1,0 +1,11 @@
+# ── os_open: open files/URLs with the default app (extends os) ─
+#   import "os_open"
+#   fn main():
+#   {
+#       os_open("https://ezylang.org")
+#       os_open("/home/user/report.pdf")
+#   }
+
+extern fn os_open(target: string) -> int               # path or URL -> 1 ok / 0 fail
+extern fn os_open_with(app: string, target: string) -> int
+extern fn os_open_version() -> string

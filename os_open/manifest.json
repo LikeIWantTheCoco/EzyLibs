@@ -1,0 +1,11 @@
+{
+  "name":         "os_open",
+  "version":      "1.0.0",
+  "type":         "c",
+  "description":  "Open files/URLs with the default app (xdg-open/open/ShellExecute) — extends os",
+  "sources":      ["os_open.c"],
+  "header":       "os_open.ez",
+  "binary":       "libos_open.so",
+  "extends":      "os",
+  "link_flags_windows": ["-lshell32"]
+}
