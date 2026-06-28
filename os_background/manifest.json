@@ -1,11 +1,11 @@
 {
-  "name":         "os_background",
-  "version":      "1.0.0",
-  "type":         "c",
-  "description":  "Background task runner (threads on all platforms) — extends os",
-  "sources":      ["os_background.c"],
-  "header":       "os_background.ez",
-  "binary":       "libos_background.so",
-  "extends":      "os",
-  "link_flags_linux": ["-lpthread"]
+  "name": "os_background",
+  "version": "1.0.0",
+  "type": "c",
+  "description": "Background task runner (threads on all platforms) — extends os",
+  "sources": ["os_background.c"],
+  "header": "os_background.ez",
+  "binary": "libos_background.so",
+  "link_flags_linux": ["-lpthread"],
+  "dependencies": ["os"]
 }

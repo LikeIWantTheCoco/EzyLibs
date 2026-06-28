@@ -1,11 +1,11 @@
 {
-  "name":         "os_notify",
-  "version":      "1.0.0",
-  "type":         "c",
-  "description":  "System notifications (notify-send / AppleScript) — extends os",
-  "sources":      ["os_notify.c"],
-  "header":       "os_notify.ez",
-  "binary":       "libos_notify.so",
-  "extends":      "os",
-  "link_flags_windows": ["-lshell32", "-luser32"]
+  "name": "os_notify",
+  "version": "1.0.0",
+  "type": "c",
+  "description": "System notifications (notify-send / AppleScript) — extends os",
+  "sources": ["os_notify.c"],
+  "header": "os_notify.ez",
+  "binary": "libos_notify.so",
+  "link_flags_windows": ["-lshell32","-luser32"],
+  "dependencies": ["os"]
 }

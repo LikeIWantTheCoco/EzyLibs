@@ -1,10 +1,10 @@
 {
-  "name":         "os_permissions",
-  "version":      "1.2.0",
-  "type":         "c",
-  "description":  "Central runtime permissions (Android JNI; desktop=granted; iOS reserved) — extends os",
-  "sources":      ["os_permissions.c"],
-  "header":       "os_permissions.ez",
-  "binary":       "libos_permissions.so",
-  "extends":      "os"
+  "name": "os_permissions",
+  "version": "1.2.0",
+  "type": "c",
+  "description": "Central runtime permissions (Android JNI; desktop=granted; iOS reserved) — extends os",
+  "sources": ["os_permissions.c"],
+  "header": "os_permissions.ez",
+  "binary": "libos_permissions.so",
+  "dependencies": ["os"]
 }

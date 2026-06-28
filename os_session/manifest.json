@@ -1,11 +1,11 @@
 {
-  "name":         "os_session",
-  "version":      "1.0.0",
-  "type":         "c",
-  "description":  "Session idle time and screen lock (xprintidle/loginctl/GetLastInputInfo) — extends os",
-  "sources":      ["os_session.c"],
-  "header":       "os_session.ez",
-  "binary":       "libos_session.so",
-  "extends":      "os",
-  "link_flags_windows": ["-luser32"]
+  "name": "os_session",
+  "version": "1.0.0",
+  "type": "c",
+  "description": "Session idle time and screen lock (xprintidle/loginctl/GetLastInputInfo) — extends os",
+  "sources": ["os_session.c"],
+  "header": "os_session.ez",
+  "binary": "libos_session.so",
+  "link_flags_windows": ["-luser32"],
+  "dependencies": ["os"]
 }

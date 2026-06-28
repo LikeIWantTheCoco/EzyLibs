@@ -1,10 +1,10 @@
 {
-  "name":         "os_brightness",
-  "version":      "1.0.0",
-  "type":         "c",
-  "description":  "Screen backlight brightness (linux sysfs/brightnessctl) — extends os",
-  "sources":      ["os_brightness.c"],
-  "header":       "os_brightness.ez",
-  "binary":       "libos_brightness.so",
-  "extends":      "os"
+  "name": "os_brightness",
+  "version": "1.0.0",
+  "type": "c",
+  "description": "Screen backlight brightness (linux sysfs/brightnessctl) — extends os",
+  "sources": ["os_brightness.c"],
+  "header": "os_brightness.ez",
+  "binary": "libos_brightness.so",
+  "dependencies": ["os"]
 }

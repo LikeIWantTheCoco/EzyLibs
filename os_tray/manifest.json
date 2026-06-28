@@ -1,12 +1,12 @@
 {
-  "name":         "os_tray",
-  "version":      "1.0.0",
-  "type":         "c",
-  "description":  "System tray icon with menu (GTK3 / Shell_NotifyIcon) — extends os",
-  "sources":      ["os_tray.c"],
-  "header":       "os_tray.ez",
-  "binary":       "libos_tray.so",
-  "extends":      "os",
-  "link_flags_linux":   ["-Wno-deprecated-declarations", "`pkg-config --cflags --libs gtk+-3.0`"],
-  "link_flags_windows": ["-lshell32", "-luser32", "-lgdi32"]
+  "name": "os_tray",
+  "version": "1.0.0",
+  "type": "c",
+  "description": "System tray icon with menu (GTK3 / Shell_NotifyIcon) — extends os",
+  "sources": ["os_tray.c"],
+  "header": "os_tray.ez",
+  "binary": "libos_tray.so",
+  "link_flags_linux": ["-Wno-deprecated-declarations","`pkg-config --cflags --libs gtk+-3.0`"],
+  "link_flags_windows": ["-lshell32","-luser32","-lgdi32"],
+  "dependencies": ["os"]
 }
