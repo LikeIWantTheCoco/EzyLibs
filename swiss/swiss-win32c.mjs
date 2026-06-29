@@ -337,8 +337,8 @@ function emit(ast, opts) {
         out.fns.push(`static void ${cb}(SwissState* s, HWND w) {\n  (void)w;\n${lines.join('\n')}\n}`);
         id = command(cb, 'EN_CHANGE');
       }
-      // flat bordered input (web-like) instead of the sunken 3D CLIENTEDGE
-      out.build.push(`  s->${f} = CreateWindowExA(0, "EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
+      // borderless EDIT — a soft rounded border is GDI+-drawn around it (frame)
+      out.build.push(`  s->${f} = CreateWindowExA(0, "EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
       out.build.push(`  SendMessageA(s->${f}, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELONG(SC(${st && st.padding != null ? Number(st.padding) : 6}), SC(${st && st.padding != null ? Number(st.padding) : 6})));`);
       const ph = strAttr(a.placeholder);
       if (ph) out.build.push(`  SendMessageW(s->${f}, EM_SETCUEBANNER, TRUE, (LPARAM)L${cwstr(ph)});`);
@@ -348,7 +348,9 @@ function emit(ast, opts) {
       }
       applyControl(`s->${f}`, st, 'edit', scope);
       const nh = leafH(24);   // width auto (-1) → fills a stretch parent; height from padding+font
-      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w}, ${nh}, ${na.flex});`); selfStep(n); pack(n); return n;
+      const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w}, ${nh}, ${na.flex});`);
+      out.build.push(`  ${n}->frame = 1; ${n}->framecol = ${colorref(st && st.borderColor) || 'RGB(204, 204, 204)'}; ${n}->radius = SC(${na.radius || 4});`);
+      selfStep(n); pack(n); return n;
     }
     if (name === 'TextArea') {
       const f = vid('ta'); stateFields.push(`  HWND ${f};`);
@@ -712,6 +714,7 @@ typedef struct Node {
   int radius;                // borderRadius (px) — rounded via a window region
   int mt, mb, ml, mr;        // margins (outer spacing around the node)
   int rx, ry, rw, rh;        // last laid-out rect (for background painting)
+  int frame; COLORREF framecol;   // draw a soft rounded border around this control (inputs)
   COLORREF bg; int hasbg, visible;
 } Node;
 
@@ -779,11 +782,11 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
   n->rx = x; n->ry = y; n->rw = w; n->rh = h;   // remember rect for bg painting
   if (n->hwnd) {
     if (moved) {
-      MoveWindow(n->hwnd, x, y, w, h, TRUE);
+      int in = n->frame ? SC(3) : 0;   // inset framed inputs so the drawn border ring shows
+      MoveWindow(n->hwnd, x + in, y + in, w - 2 * in, h - 2 * in, TRUE);
       // borderRadius → clip the control to a rounded rect. Owner-drawn buttons
-      // skip this — they paint antialiased rounded corners with GDI+ instead of
-      // a hard-edged region clip.
-      if (n->radius > 0 && !swiss_is_btn(n->hwnd))
+      // and framed inputs skip this — corners come from the GDI+ drawing.
+      if (n->radius > 0 && !n->frame && !swiss_is_btn(n->hwnd))
         SetWindowRgn(n->hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, n->radius * 2, n->radius * 2), TRUE);
     }
     return;
@@ -876,6 +879,16 @@ static int g_darktheme;
 static void swiss_paint_bg(Node* n, HDC hdc) {
   if (n->hasbg) { RECT r = { n->rx, n->ry, n->rx + n->rw, n->ry + n->rh }; HBRUSH b = CreateSolidBrush(n->bg); FillRect(hdc, &r, b); DeleteObject(b); }
   for (int i = 0; i < n->nkids; i++) if (n->kids[i]->visible) swiss_paint_bg(n->kids[i], hdc);
+}
+// soft rounded border around inputs (drawn behind the inset EDIT), accent when focused
+static HWND g_focus;
+static void swiss_paint_frames(Node* n, HDC hdc) {
+  if (n->frame && n->hwnd) {
+    RECT r = { n->rx, n->ry, n->rx + n->rw, n->ry + n->rh };
+    int foc = (n->hwnd == g_focus);
+    swiss_fill_round(hdc, r, n->radius, C2A(g_bgcol), foc ? C2A(RGB(0, 102, 204)) : C2A(n->framecol), foc ? 2.0f : 1.0f);
+  }
+  for (int i = 0; i < n->nkids; i++) if (n->kids[i]->visible) swiss_paint_frames(n->kids[i], hdc);
 }
 
 // ── owner-drawn buttons: GDI+ antialiased rounded fill on the panel bg behind ──
@@ -1009,6 +1022,9 @@ ${[...out.postShow.map((x) => '  ' + x), ...initLines].join('\n') || '  (void)s;
 static LRESULT CALLBACK swiss_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   switch (msg) {
     case WM_COMMAND: {
+      if (HIWORD(wp) == EN_SETFOCUS || HIWORD(wp) == EN_KILLFOCUS) {   // input focus ring
+        g_focus = HIWORD(wp) == EN_SETFOCUS ? (HWND)lp : NULL; InvalidateRect(hwnd, NULL, FALSE);
+      }
 ${cmdCases || '      break;'}
       break;
     }
@@ -1037,7 +1053,7 @@ ${cmdCases || '      break;'}
       HBITMAP bmp = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
       HGDIOBJ ob = SelectObject(mem, bmp);
       FillRect(mem, &rc, g_white);
-      if (g_root) swiss_paint_bg(g_root, mem);   // View backgroundColor rects
+      if (g_root) { swiss_paint_bg(g_root, mem); swiss_paint_frames(g_root, mem); }   // View bg + input borders
       BitBlt(hdc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
       SelectObject(mem, ob); DeleteObject(bmp); DeleteDC(mem);
       EndPaint(hwnd, &ps); return 0;
