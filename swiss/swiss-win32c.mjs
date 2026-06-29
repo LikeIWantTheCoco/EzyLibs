@@ -947,7 +947,7 @@ static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
     // plain buttons get a 1px border; focused buttons get an accent ring
     ARGB border = focus ? C2A(RGB(0, 102, 204)) : plain ? C2A(RGB(205, 208, 212)) : 0;
     swiss_fill_round(d->hDC, d->rcItem, r, C2A(bg), border, (focus || plain) ? (focus ? 2.0f : 1.0f) : 0.0f);
-    SetBkMode(d->hDC, TRANSPARENT);
+    SetBkColor(d->hDC, bg); SetBkMode(d->hDC, OPAQUE);   // opaque over the solid fill → subpixel ClearType text
     SetTextColor(d->hDC, g_btns[i].hasfg ? g_btns[i].fg : GetSysColor(COLOR_BTNTEXT));
     HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0);
     HGDIOBJ of = f ? SelectObject(d->hDC, f) : NULL;
@@ -973,7 +973,7 @@ static int swiss_combo_draw(LPDRAWITEMSTRUCT d) {
   HBRUSH b = CreateSolidBrush(sel ? RGB(0, 102, 204) : g_bgcol); FillRect(d->hDC, &rc, b); DeleteObject(b);
   if (d->itemID != (UINT)-1) {
     char txt[256]; txt[0] = 0; SendMessageA(d->hwndItem, CB_GETLBTEXT, d->itemID, (LPARAM)txt);
-    SetBkMode(d->hDC, TRANSPARENT); SetTextColor(d->hDC, sel ? RGB(255, 255, 255) : g_fgcol);
+    SetBkColor(d->hDC, sel ? RGB(0, 102, 204) : g_bgcol); SetBkMode(d->hDC, OPAQUE); SetTextColor(d->hDC, sel ? RGB(255, 255, 255) : g_fgcol);
     HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0); HGDIOBJ of = f ? SelectObject(d->hDC, f) : NULL;
     RECT tr = rc; tr.left += SC(8);
     DrawTextA(d->hDC, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -999,7 +999,7 @@ static int swiss_check_draw(LPDRAWITEMSTRUCT d) {
     }
     if (pen) GdipDeletePen(pen); if (g) GdipDeleteGraphics(g);
   }
-  SetBkMode(d->hDC, TRANSPARENT); SetTextColor(d->hDC, g_checks[i].fg);
+  SetBkColor(d->hDC, g_checks[i].behind); SetBkMode(d->hDC, OPAQUE); SetTextColor(d->hDC, g_checks[i].fg);
   HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0); HGDIOBJ of = f ? SelectObject(d->hDC, f) : NULL;
   char buf[256]; GetWindowTextA(d->hwndItem, buf, sizeof buf);
   RECT tr = { rc.left + box + SC(8), rc.top, rc.right, rc.bottom };
