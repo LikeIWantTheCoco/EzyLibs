@@ -863,6 +863,11 @@ static void swiss_relayout(void) {
 static const char* g_fontface = "Segoe UI";
 static int CALLBACK swiss_fontprobe(const LOGFONTA* lf, const TEXTMETRICA* tm, DWORD ty, LPARAM lp) { (void)lf; (void)tm; (void)ty; *(int*)lp = 1; return 0; }
 static void swiss_pick_font(void) {
+  // real Windows → Segoe UI (modern native). wine/Linux → DejaVu Sans if present
+  // (matches the GTK target there). Detect wine via ntdll's wine_get_version.
+  HMODULE nt = GetModuleHandleA("ntdll.dll");
+  int is_wine = nt && GetProcAddress(nt, "wine_get_version") != NULL;
+  if (!is_wine) return;   // keep "Segoe UI" on Windows
   HDC dc = GetDC(NULL); int found = 0;
   EnumFontFamiliesA(dc, "DejaVu Sans", swiss_fontprobe, (LPARAM)&found);
   ReleaseDC(NULL, dc);
@@ -1168,7 +1173,14 @@ ${cmdCases || '      break;'}
 int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
   (void)hp; (void)cmd;
   g_hinst = hi;
-  { HDC _dc = GetDC(NULL); int _dpi = GetDeviceCaps(_dc, LOGPIXELSX); ReleaseDC(NULL, _dc); if (_dpi > 0) g_scale = _dpi / 96.0; }  // HiDPI factor (process is per-monitor DPI-aware via the manifest)
+  // per-monitor DPI awareness at runtime too (not just the manifest) so the app
+  // never gets bitmap-upscaled (blurry) — must run before any window
+  { HMODULE u = GetModuleHandleA("user32.dll");
+    typedef BOOL (WINAPI *SetCtx)(HANDLE);
+    SetCtx setctx = u ? (SetCtx)(void*)GetProcAddress(u, "SetProcessDpiAwarenessContext") : NULL;
+    if (setctx) setctx((HANDLE)(INT_PTR)-4);   // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+  }
+  { HDC _dc = GetDC(NULL); int _dpi = GetDeviceCaps(_dc, LOGPIXELSX); ReleaseDC(NULL, _dc); if (_dpi > 0) g_scale = _dpi / 96.0; }  // HiDPI factor
   { ULONG_PTR _gp; GdiplusStartupInput _gi = { 1, NULL, FALSE, FALSE }; GdiplusStartup(&_gp, &_gi, NULL); }   // antialiased control rendering
   swiss_pick_font();   // DejaVu Sans where available (matches the GTK target), else Segoe UI
   { INITCOMMONCONTROLSEX _ic = { sizeof(INITCOMMONCONTROLSEX), ICC_STANDARD_CLASSES | ICC_BAR_CLASSES | ICC_PROGRESS_CLASS }; InitCommonControlsEx(&_ic); }
