@@ -784,8 +784,13 @@ static void swiss_set_theme(long long dark) {
     g_theme_prov = gtk_css_provider_new();
     gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(g_theme_prov), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION - 1);
   }
-  // shape: flat, rounded, padded controls (web-like) — same in both themes
-  const char* shape = "entry, button, combobox { border-radius:4px; min-height:0; } entry { padding:4px 8px; border:1px solid #cccccc; }";
+  // shape: flat, rounded, padded controls + a web-like accent focus ring — same
+  // in both themes
+  const char* shape =
+    "entry, button, combobox { border-radius:4px; min-height:0; transition:120ms; }"
+    " entry { padding:4px 8px; border:1px solid #cccccc; }"
+    " entry:focus { border-color:#0066cc; }"
+    " button:focus, entry:focus, combobox:focus { outline-color:#0066cc; outline-style:solid; outline-width:2px; }";
   char* css = g_strconcat(shape, dark
     ? " window { background-color:#1e1e1e; color:#e6e6e6; } entry, textview, text { background-color:#2a2a2a; color:#e6e6e6; } entry { border-color:#444; }"
     : " window { background-color:#ffffff; color:#1a1a1a; } entry, textview, text { background-color:#ffffff; color:#1a1a1a; }", NULL);

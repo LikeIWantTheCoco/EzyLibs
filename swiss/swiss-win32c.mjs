@@ -847,10 +847,19 @@ static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
     char buf[256]; GetWindowTextA(d->hwndItem, buf, sizeof buf);
     DrawTextA(d->hDC, buf, -1, &d->rcItem, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     if (of) SelectObject(d->hDC, of);
+    if (d->itemState & ODS_FOCUS) {   // web-like focus ring (accent outline)
+      HPEN pen = CreatePen(PS_SOLID, 2, RGB(0, 102, 204)); HGDIOBJ op = SelectObject(d->hDC, pen);
+      HGDIOBJ ob = SelectObject(d->hDC, GetStockObject(NULL_BRUSH));
+      int r = g_btns[i].radius; RECT* rc = &d->rcItem;
+      if (r > 0) RoundRect(d->hDC, rc->left + 1, rc->top + 1, rc->right - 1, rc->bottom - 1, r * 2, r * 2);
+      else Rectangle(d->hDC, rc->left + 1, rc->top + 1, rc->right - 1, rc->bottom - 1);
+      SelectObject(d->hDC, op); SelectObject(d->hDC, ob); DeleteObject(pen);
+    }
     return 1;
   }
   return 0;
 }
+static int swiss_is_btn(HWND w) { for (int i = 0; i < g_nbtns; i++) if (g_btns[i].w == w) return 1; return 0; }
 
 typedef struct {
 ${cells.map((c) => `  ${c.ctype} ${c.name};`).join('\n') || '  int _u;'}
@@ -958,6 +967,10 @@ ${cmdCases || '      break;'}
     }
     case WM_DRAWITEM: {
       if (swiss_btn_draw((LPDRAWITEMSTRUCT)lp)) return TRUE;
+      break;
+    }
+    case WM_SETCURSOR: {   // hand cursor over styled buttons (web cursor:pointer)
+      if (swiss_is_btn((HWND)wp)) { SetCursor(LoadCursorA(NULL, (LPCSTR)IDC_HAND)); return TRUE; }
       break;
     }
     case WM_HSCROLL: {
