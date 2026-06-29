@@ -270,23 +270,28 @@ function emit(ast, opts) {
     if (name === 'Text') {
       const info = textSnippet(el, scope, '');
       const ssAlign = st && st.textAlign === 'center' ? 'SS_CENTER' : st && st.textAlign === 'right' ? 'SS_RIGHT' : 'SS_LEFT';  // honor JSX textAlign (default left)
+      // a Text with backgroundColor is an owner-drawn rounded pill (badge/chip)
+      const pillBg = st && colorref(st.backgroundColor);
+      const pillAlign = st && st.textAlign === 'center' ? 1 : st && st.textAlign === 'right' ? 2 : 0;
+      const sstyle = pillBg ? 'SS_OWNERDRAW | SS_NOTIFY' : ssAlign;
+      const regPill = (hw) => { if (pillBg) out.build.push(`  swiss_pill_style(${hw}, ${pillBg}, ${(st && colorref(st.color)) || 'RGB(255,255,255)'}, ${(scope && scope.__bg) || 'g_bgcol'}, SC(${na.radius || 6}), ${pillAlign});`); };
       if (info.dynamic) {
         if (scope.__inrow) {
-          const hw = ctl('"STATIC"', ssAlign, 'NULL', 'text');
+          const hw = ctl('"STATIC"', sstyle, 'NULL', 'text');
           out.build.push(`  ${textSnippet(el, scope, hw).snippet}`);
-          applyControl(hw, st, 'text', scope); const n = vid('n');
+          applyControl(hw, st, 'text', scope); regPill(hw); const n = vid('n');
           out.build.push(`  Node* ${n} = ${mkNode(hw)};`); selfStep(n); pack(n); return n;
         }
         const f = vid('lbl'); stateFields.push(`  HWND ${f};`);
-        out.build.push(`  s->${f} = CreateWindowExA(0, "STATIC", NULL, WS_CHILD | WS_VISIBLE | ${ssAlign}, 0, 0, 0, 0, g_main, NULL, g_hinst, NULL);`);
+        out.build.push(`  s->${f} = CreateWindowExA(0, "STATIC", NULL, WS_CHILD | WS_VISIBLE | ${sstyle}, 0, 0, 0, 0, g_main, NULL, g_hinst, NULL);`);
         const real = textSnippet(el, scope, `s->${f}`);
         out.build.push(`  ${real.snippet}`);
         info.reads.forEach((cn) => deps[cn].push(real.snippet));
-        applyControl(`s->${f}`, st, 'text', scope);
+        applyControl(`s->${f}`, st, 'text', scope); regPill(`s->${f}`);
         const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(`s->${f}`)};`); selfStep(n); pack(n); return n;
       }
-      const hw = ctl('"STATIC"', ssAlign, cstr(info.staticText), 'text');
-      applyControl(hw, st, 'text', scope);
+      const hw = ctl('"STATIC"', sstyle, cstr(info.staticText), 'text');
+      applyControl(hw, st, 'text', scope); regPill(hw);
       const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(hw)};`); selfStep(n); pack(n); return n;
     }
     if (name === 'Button') {
@@ -732,6 +737,7 @@ static Node* g_root;
 static double g_scale = 1.0;            // HiDPI factor (dpi/96) — crisp + correct size
 #define SC(x) ((int)((x) * g_scale))    // scale a logical px value to physical
 static int swiss_is_btn(HWND);          // (defined below; used by the layout)
+static int swiss_is_pill(HWND);
 
 static Node* swiss_node_new(void) { Node* n = (Node*)calloc(1, sizeof(Node)); n->w = n->h = -1; n->visible = 1; return n; }
 static Node* swiss_view(int dir, int pad, int gap, int flex, int w, int h, int justify, int align) {
@@ -794,7 +800,7 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
       MoveWindow(n->hwnd, x + in, y + in, w - 2 * in, h - 2 * in, TRUE);
       // borderRadius → clip the control to a rounded rect. Owner-drawn buttons
       // and framed inputs skip this — corners come from the GDI+ drawing.
-      if (n->radius > 0 && !n->frame && !swiss_is_btn(n->hwnd))
+      if (n->radius > 0 && !n->frame && !swiss_is_btn(n->hwnd) && !swiss_is_pill(n->hwnd))
         SetWindowRgn(n->hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, n->radius * 2, n->radius * 2), TRUE);
     }
     return;
@@ -867,11 +873,15 @@ static void swiss_pick_font(void) {
   // (matches the GTK target there). Detect wine via ntdll's wine_get_version.
   HMODULE nt = GetModuleHandleA("ntdll.dll");
   int is_wine = nt && GetProcAddress(nt, "wine_get_version") != NULL;
-  if (!is_wine) return;   // keep "Segoe UI" on Windows
   HDC dc = GetDC(NULL); int found = 0;
-  EnumFontFamiliesA(dc, "DejaVu Sans", swiss_fontprobe, (LPARAM)&found);
+  if (is_wine) {   // Linux/wine: match the GTK target's DejaVu
+    EnumFontFamiliesA(dc, "DejaVu Sans", swiss_fontprobe, (LPARAM)&found);
+    if (found) g_fontface = "DejaVu Sans";
+  } else {         // Windows: prefer the modern Win11 UI font, else classic Segoe UI
+    EnumFontFamiliesA(dc, "Segoe UI Variable Text", swiss_fontprobe, (LPARAM)&found);
+    if (found) g_fontface = "Segoe UI Variable Text";
+  }
   ReleaseDC(NULL, dc);
-  if (found) g_fontface = "DejaVu Sans";
 }
 static struct { int px, bold; HFONT f; } g_fonts[64]; static int g_nfonts;
 static HFONT swiss_font(int px, int bold) {
@@ -944,9 +954,10 @@ static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
     HBRUSH bb = CreateSolidBrush(g_btns[i].behind); FillRect(d->hDC, &d->rcItem, bb); DeleteObject(bb);
     int r = g_btns[i].radius;
     int focus = (d->itemState & ODS_FOCUS) ? 1 : 0;
-    // plain buttons get a 1px border; focused buttons get an accent ring
-    ARGB border = focus ? C2A(RGB(0, 102, 204)) : plain ? C2A(RGB(205, 208, 212)) : 0;
-    swiss_fill_round(d->hDC, d->rcItem, r, C2A(bg), border, (focus || plain) ? (focus ? 2.0f : 1.0f) : 0.0f);
+    // every button gets a 1px border for definition (GTK-like): a darker shade
+    // of its own color when colored, a neutral gray when plain, accent when focused
+    ARGB border = focus ? C2A(RGB(0, 102, 204)) : plain ? C2A(RGB(205, 208, 212)) : C2A(swiss_darken(bg, 82));
+    swiss_fill_round(d->hDC, d->rcItem, r, C2A(bg), border, focus ? 2.0f : 1.0f);
     SetBkColor(d->hDC, bg); SetBkMode(d->hDC, OPAQUE);   // opaque over the solid fill → subpixel ClearType text
     SetTextColor(d->hDC, g_btns[i].hasfg ? g_btns[i].fg : GetSysColor(COLOR_BTNTEXT));
     HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0);
@@ -979,6 +990,26 @@ static int swiss_combo_draw(LPDRAWITEMSTRUCT d) {
     DrawTextA(d->hDC, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     if (of) SelectObject(d->hDC, of);
   }
+  return 1;
+}
+// a Text with backgroundColor → an owner-drawn rounded pill (badges/chips), AA
+static struct { HWND w; COLORREF bg, fg, behind; int radius, align; } g_pills[64]; static int g_npills;
+static void swiss_pill_style(HWND w, COLORREF bg, COLORREF fg, COLORREF behind, int radius, int align) {
+  if (g_npills < 64) { g_pills[g_npills].w = w; g_pills[g_npills].bg = bg; g_pills[g_npills].fg = fg; g_pills[g_npills].behind = behind; g_pills[g_npills].radius = radius; g_pills[g_npills].align = align; g_npills++; }
+}
+static int swiss_is_pill(HWND w) { for (int i = 0; i < g_npills; i++) if (g_pills[i].w == w) return 1; return 0; }
+static int swiss_pill_draw(LPDRAWITEMSTRUCT d) {
+  if (d->CtlType != ODT_STATIC) return 0;
+  int i = -1; for (int k = 0; k < g_npills; k++) if (g_pills[k].w == d->hwndItem) { i = k; break; }
+  if (i < 0) return 0;
+  HBRUSH bb = CreateSolidBrush(g_pills[i].behind); FillRect(d->hDC, &d->rcItem, bb); DeleteObject(bb);
+  swiss_fill_round(d->hDC, d->rcItem, g_pills[i].radius, C2A(g_pills[i].bg), 0, 0);
+  SetBkColor(d->hDC, g_pills[i].bg); SetBkMode(d->hDC, OPAQUE); SetTextColor(d->hDC, g_pills[i].fg);
+  HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0); HGDIOBJ of = f ? SelectObject(d->hDC, f) : NULL;
+  char buf[256]; GetWindowTextA(d->hwndItem, buf, sizeof buf);
+  UINT al = g_pills[i].align == 1 ? DT_CENTER : g_pills[i].align == 2 ? DT_RIGHT : DT_LEFT;
+  DrawTextA(d->hDC, buf, -1, &d->rcItem, al | DT_VCENTER | DT_SINGLELINE);
+  if (of) SelectObject(d->hDC, of);
   return 1;
 }
 static int swiss_check_draw(LPDRAWITEMSTRUCT d) {
@@ -1122,6 +1153,7 @@ ${cmdCases || '      break;'}
       if (swiss_btn_draw((LPDRAWITEMSTRUCT)lp)) return TRUE;
       if (swiss_check_draw((LPDRAWITEMSTRUCT)lp)) return TRUE;
       if (swiss_combo_draw((LPDRAWITEMSTRUCT)lp)) return TRUE;
+      if (swiss_pill_draw((LPDRAWITEMSTRUCT)lp)) return TRUE;
       break;
     }
     case WM_MEASUREITEM: {
