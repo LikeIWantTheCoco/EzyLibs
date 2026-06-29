@@ -303,7 +303,7 @@ function emit(ast, opts) {
       const owner = bgCol || fgCol;
       const bstyle = owner ? 'BS_OWNERDRAW' : isSubmit ? 'BS_DEFPUSHBUTTON' : 'BS_PUSHBUTTON';
       out.build.push(`  HWND ${hw} = CreateWindowExA(0, "BUTTON", ${cstr(label)}, WS_CHILD | WS_VISIBLE | ${bstyle} | WS_TABSTOP, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
-      if (owner) out.build.push(`  swiss_btn_style(${hw}, ${bgCol || '0'}, ${bgCol ? 1 : 0}, ${fgCol || '0'}, ${fgCol ? 1 : 0}, ${na.radius});`);
+      if (owner) out.build.push(`  swiss_btn_style(${hw}, ${bgCol || '0'}, ${bgCol ? 1 : 0}, ${fgCol || '0'}, ${fgCol ? 1 : 0}, SC(${na.radius}), ${(scope && scope.__bg) || 'g_bgcol'});`);
       if (scope.__index) out.build.push(`  SetWindowLongPtrA(${hw}, GWLP_USERDATA, (LONG_PTR)${scope.__index.c});`);
       if (dynTitle) {
         const tv = cexpr(dynTitle, scope);
@@ -657,6 +657,49 @@ ${arrayCells.map((c) =>
   `static void arrpush_${c.name}(${c.arrtype}* a, ${c.struct} v) { if (a->len >= a->cap) { a->cap = a->cap ? a->cap * 2 : 8; a->data = realloc(a->data, a->cap * sizeof(${c.struct})); } a->data[a->len++] = v; }`
 ).join('\n')}
 
+// ── GDI+ flat API (subset, declared by hand for C) — antialiased fills so
+// controls get smooth rounded corners / soft borders instead of the hard,
+// aliased look of GDI + region clipping ──
+typedef int GpStatus; typedef void GpGraphics; typedef void GpPath; typedef void GpBrush; typedef void GpPen; typedef DWORD ARGB;
+typedef struct { UINT32 v; void* cb; BOOL bg; BOOL ext; } GdiplusStartupInput;
+GpStatus WINAPI GdiplusStartup(ULONG_PTR*, const GdiplusStartupInput*, void*);
+void WINAPI GdiplusShutdown(ULONG_PTR);
+GpStatus WINAPI GdipCreateFromHDC(HDC, GpGraphics**);
+GpStatus WINAPI GdipDeleteGraphics(GpGraphics*);
+GpStatus WINAPI GdipSetSmoothingMode(GpGraphics*, int);
+GpStatus WINAPI GdipCreatePath(int, GpPath**);
+GpStatus WINAPI GdipDeletePath(GpPath*);
+GpStatus WINAPI GdipAddPathArc(GpPath*, float, float, float, float, float, float);
+GpStatus WINAPI GdipAddPathRectangle(GpPath*, float, float, float, float);
+GpStatus WINAPI GdipClosePathFigure(GpPath*);
+GpStatus WINAPI GdipCreateSolidFill(ARGB, GpBrush**);
+GpStatus WINAPI GdipDeleteBrush(GpBrush*);
+GpStatus WINAPI GdipFillPath(GpGraphics*, GpBrush*, GpPath*);
+GpStatus WINAPI GdipCreatePen1(ARGB, float, int, GpPen**);
+GpStatus WINAPI GdipDeletePen(GpPen*);
+GpStatus WINAPI GdipDrawPath(GpGraphics*, GpPen*, GpPath*);
+#define C2A(c) (0xFF000000u | (GetRValue(c) << 16) | (GetGValue(c) << 8) | GetBValue(c))
+// rounded-rect path (or plain rect if r<=0)
+static void swiss_round_path(GpPath* p, float x, float y, float w, float h, float r) {
+  if (r <= 0) { GdipAddPathRectangle(p, x, y, w, h); return; }
+  float d = r * 2;
+  GdipAddPathArc(p, x, y, d, d, 180, 90);
+  GdipAddPathArc(p, x + w - d, y, d, d, 270, 90);
+  GdipAddPathArc(p, x + w - d, y + h - d, d, d, 0, 90);
+  GdipAddPathArc(p, x, y + h - d, d, d, 90, 90);
+  GdipClosePathFigure(p);
+}
+// antialiased rounded fill (+ optional border) on an HDC rect
+static void swiss_fill_round(HDC hdc, RECT rc, int r, ARGB fill, ARGB border, float bw) {
+  GpGraphics* g = NULL; if (GdipCreateFromHDC(hdc, &g) != 0 || !g) return;
+  GdipSetSmoothingMode(g, 4 /* AntiAlias */);
+  GpPath* p = NULL; GdipCreatePath(0, &p);
+  swiss_round_path(p, (float)rc.left + 0.5f, (float)rc.top + 0.5f, (float)(rc.right - rc.left) - 1, (float)(rc.bottom - rc.top) - 1, (float)r);
+  GpBrush* b = NULL; GdipCreateSolidFill(fill, &b); GdipFillPath(g, b, p); GdipDeleteBrush(b);
+  if (bw > 0) { GpPen* pen = NULL; GdipCreatePen1(border, bw, 2 /* UnitPixel */, &pen); if (pen) { GdipDrawPath(g, pen, p); GdipDeletePen(pen); } }
+  GdipDeletePath(p); GdipDeleteGraphics(g);
+}
+
 // ── runtime layout node tree (stack/flex, recomputed on resize) ──
 typedef struct Node {
   HWND hwnd;                 // control window (NULL for a pure container)
@@ -677,6 +720,7 @@ static HWND g_main;
 static Node* g_root;
 static double g_scale = 1.0;            // HiDPI factor (dpi/96) — crisp + correct size
 #define SC(x) ((int)((x) * g_scale))    // scale a logical px value to physical
+static int swiss_is_btn(HWND);          // (defined below; used by the layout)
 
 static Node* swiss_node_new(void) { Node* n = (Node*)calloc(1, sizeof(Node)); n->w = n->h = -1; n->visible = 1; return n; }
 static Node* swiss_view(int dir, int pad, int gap, int flex, int w, int h, int justify, int align) {
@@ -736,7 +780,10 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
   if (n->hwnd) {
     if (moved) {
       MoveWindow(n->hwnd, x, y, w, h, TRUE);
-      if (n->radius > 0)  // borderRadius → clip the control to a rounded rect
+      // borderRadius → clip the control to a rounded rect. Owner-drawn buttons
+      // skip this — they paint antialiased rounded corners with GDI+ instead of
+      // a hard-edged region clip.
+      if (n->radius > 0 && !swiss_is_btn(n->hwnd))
         SetWindowRgn(n->hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, n->radius * 2, n->radius * 2), TRUE);
     }
     return;
@@ -831,11 +878,11 @@ static void swiss_paint_bg(Node* n, HDC hdc) {
   for (int i = 0; i < n->nkids; i++) if (n->kids[i]->visible) swiss_paint_bg(n->kids[i], hdc);
 }
 
-// ── owner-drawn buttons (native Win32 buttons ignore backgroundColor/color) ──
-static struct { HWND w; COLORREF bg, fg; int radius, hasbg, hasfg; } g_btns[64]; static int g_nbtns;
-static void swiss_btn_style(HWND w, COLORREF bg, int hasbg, COLORREF fg, int hasfg, int radius) {
+// ── owner-drawn buttons: GDI+ antialiased rounded fill on the panel bg behind ──
+static struct { HWND w; COLORREF bg, fg, behind; int radius, hasbg, hasfg; } g_btns[64]; static int g_nbtns;
+static void swiss_btn_style(HWND w, COLORREF bg, int hasbg, COLORREF fg, int hasfg, int radius, COLORREF behind) {
   if (g_nbtns < 64) { g_btns[g_nbtns].w = w; g_btns[g_nbtns].bg = bg; g_btns[g_nbtns].hasbg = hasbg;
-    g_btns[g_nbtns].fg = fg; g_btns[g_nbtns].hasfg = hasfg; g_btns[g_nbtns].radius = radius; g_nbtns++; }
+    g_btns[g_nbtns].fg = fg; g_btns[g_nbtns].hasfg = hasfg; g_btns[g_nbtns].radius = radius; g_btns[g_nbtns].behind = behind; g_nbtns++; }
 }
 static COLORREF swiss_darken(COLORREF c, int pct) { return RGB(GetRValue(c)*pct/100, GetGValue(c)*pct/100, GetBValue(c)*pct/100); }
 static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
@@ -843,8 +890,11 @@ static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
     COLORREF bg = g_btns[i].hasbg ? g_btns[i].bg : GetSysColor(COLOR_BTNFACE);
     if (d->itemState & ODS_SELECTED) bg = swiss_darken(bg, 85);          // pressed
     else if (d->itemState & ODS_HOTLIGHT) bg = swiss_darken(bg, 92);     // hover
-    HBRUSH br = CreateSolidBrush(bg);
-    FillRect(d->hDC, &d->rcItem, br); DeleteObject(br);                  // window region rounds the corners
+    // paint the panel color behind first (no window region — GDI+ AA rounds it)
+    HBRUSH bb = CreateSolidBrush(g_btns[i].behind); FillRect(d->hDC, &d->rcItem, bb); DeleteObject(bb);
+    int r = g_btns[i].radius;
+    int focus = (d->itemState & ODS_FOCUS) ? 1 : 0;
+    swiss_fill_round(d->hDC, d->rcItem, r, C2A(bg), C2A(RGB(0, 102, 204)), focus ? 2.0f : 0.0f);
     SetBkMode(d->hDC, TRANSPARENT);
     SetTextColor(d->hDC, g_btns[i].hasfg ? g_btns[i].fg : GetSysColor(COLOR_BTNTEXT));
     HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0);
@@ -852,14 +902,6 @@ static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
     char buf[256]; GetWindowTextA(d->hwndItem, buf, sizeof buf);
     DrawTextA(d->hDC, buf, -1, &d->rcItem, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     if (of) SelectObject(d->hDC, of);
-    if (d->itemState & ODS_FOCUS) {   // web-like focus ring (accent outline)
-      HPEN pen = CreatePen(PS_SOLID, 2, RGB(0, 102, 204)); HGDIOBJ op = SelectObject(d->hDC, pen);
-      HGDIOBJ ob = SelectObject(d->hDC, GetStockObject(NULL_BRUSH));
-      int r = g_btns[i].radius; RECT* rc = &d->rcItem;
-      if (r > 0) RoundRect(d->hDC, rc->left + 1, rc->top + 1, rc->right - 1, rc->bottom - 1, r * 2, r * 2);
-      else Rectangle(d->hDC, rc->left + 1, rc->top + 1, rc->right - 1, rc->bottom - 1);
-      SelectObject(d->hDC, op); SelectObject(d->hDC, ob); DeleteObject(pen);
-    }
     return 1;
   }
   return 0;
@@ -1019,6 +1061,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
   (void)hp; (void)cmd;
   g_hinst = hi;
   { HDC _dc = GetDC(NULL); int _dpi = GetDeviceCaps(_dc, LOGPIXELSX); ReleaseDC(NULL, _dc); if (_dpi > 0) g_scale = _dpi / 96.0; }  // HiDPI factor (process is per-monitor DPI-aware via the manifest)
+  { ULONG_PTR _gp; GdiplusStartupInput _gi = { 1, NULL, FALSE, FALSE }; GdiplusStartup(&_gp, &_gi, NULL); }   // antialiased control rendering
   { INITCOMMONCONTROLSEX _ic = { sizeof(INITCOMMONCONTROLSEX), ICC_STANDARD_CLASSES | ICC_BAR_CLASSES | ICC_PROGRESS_CLASS }; InitCommonControlsEx(&_ic); }
 ${cells.filter((c) => c.cinit != null).map((c) => `  S.${c.name} = ${c.cinit};`).join('\n')}
 ${refs.map((r) => `  S.${r.name}__current = ${r.cinit};`).join('\n')}

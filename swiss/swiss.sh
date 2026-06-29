@@ -398,7 +398,7 @@ XML
   # pthreads) so the binary stays self-contained — only system DLLs remain.
   "$CC" "$work/frontend.c" "$work/backend.o" "$work/winshim.o" "$work/manifest.o" -o "$name$EXT" \
     -mwindows -static $ezylib_flags \
-    -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshell32 -lole32 -lwinpthread -lm
+    -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshell32 -lole32 -lgdiplus -lwinpthread -lm
   echo "swiss: built ./$name$EXT  (portable — links only Windows system DLLs)"
   echo "       quick test:  wine ./$name$EXT"
 }
