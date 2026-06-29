@@ -40,7 +40,7 @@ function emit(ast, opts) {
   let hN = 0;
   // how each control kind reads its event value (the value passed to onChange)
   const VAL = {
-    toggle: '(SendMessageA(w, BM_GETCHECK, 0, 0) == BST_CHECKED)',
+    toggle: 'swiss_check_get(w)',
     range: '(long long)SendMessageA(w, TBM_GETPOS, 0, 0)',
     combo: '(long long)SendMessageA(w, CB_GETCURSEL, 0, 0)',
   };
@@ -84,6 +84,7 @@ function emit(ast, opts) {
       else if (k === 'color') o.color = s;
       else if (k === 'backgroundColor' || k === 'background') o.backgroundColor = s;
       else if (k === 'borderRadius') o.borderRadius = num(s);
+      else if (k === 'boxShadow') o.boxShadow = s;
       else if (k === 'textAlign') o.textAlign = s;
       else if (k === 'flexDirection') o.flexDirection = s;
       else if (k === 'gap') o.gap = num(s);
@@ -156,7 +157,8 @@ function emit(ast, opts) {
     const mt = side('marginTop'), mb = side('marginBottom'), ml = side('marginLeft'), mr = side('marginRight');
     const fillcross = st && (st.fillCross || (st.flex || st.flexGrow)) ? 1 : 0;  // width:100% / flex → fill parent cross-axis
     const radius = st && st.borderRadius ? Number(st.borderRadius) : 0;
-    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross, radius };
+    const shadow = st && st.boxShadow && st.boxShadow !== 'none' ? 1 : 0;
+    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross, radius, shadow };
   }
   // apply font + text color to a freshly created control hwnd expr
   function applyControl(hw, st, kind, scope) {
@@ -231,6 +233,7 @@ function emit(ast, opts) {
       if (na.selfalign) out.build.push(`  ${nv}->selfalign = ${na.selfalign};`);
       if (na.fillcross) out.build.push(`  ${nv}->fillcross = 1;`);
       if (na.radius) out.build.push(`  ${nv}->radius = SC(${na.radius});`);
+      if (na.shadow) out.build.push(`  ${nv}->shadow = 1;`);
       if (na.mt || na.mb || na.ml || na.mr) out.build.push(`  ${nv}->mt = SC(${na.mt}); ${nv}->mb = SC(${na.mb}); ${nv}->ml = SC(${na.ml}); ${nv}->mr = SC(${na.mr});`);
     };
     // control height: explicit height wins; else derive from vertical padding +
@@ -375,10 +378,12 @@ function emit(ast, opts) {
       const f = vid('chk'); stateFields.push(`  HWND ${f};`);
       const cell = a.value && a.value.type === 'JSXExpressionContainer' ? cellByName(a.value.expression.name) : null;
       const id = a.onChange ? command(emitHandler(a.onChange, scope, 'toggle'), 'BN_CLICKED') : 0;
-      out.build.push(`  s->${f} = CreateWindowExA(0, "BUTTON", ${cstr(strAttr(a.label))}, WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
+      // owner-drawn checkbox (rounded box + GDI+ check) instead of the native one
+      out.build.push(`  s->${f} = CreateWindowExA(0, "BUTTON", ${cstr(strAttr(a.label))}, WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
+      out.build.push(`  swiss_check_style(s->${f}, ${(scope && scope.__bg) || 'g_bgcol'}, ${(st && colorref(st.color)) || 'g_fgcol'});`);
       if (cell) {
-        out.build.push(`  SendMessageA(s->${f}, BM_SETCHECK, s->${cell.name} ? BST_CHECKED : BST_UNCHECKED, 0);`);
-        deps[cell.name].push(`SendMessageA(s->${f}, BM_SETCHECK, s->${cell.name} ? BST_CHECKED : BST_UNCHECKED, 0);`);
+        out.build.push(`  swiss_check_set(s->${f}, s->${cell.name});`);
+        deps[cell.name].push(`swiss_check_set(s->${f}, s->${cell.name});`);
       }
       applyControl(`s->${f}`, st, 'text', scope);
       const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w}, ${na.h < 0 ? 22 : na.h}, ${na.flex});`); selfStep(n); pack(n); return n;
@@ -680,6 +685,7 @@ GpStatus WINAPI GdipFillPath(GpGraphics*, GpBrush*, GpPath*);
 GpStatus WINAPI GdipCreatePen1(ARGB, float, int, GpPen**);
 GpStatus WINAPI GdipDeletePen(GpPen*);
 GpStatus WINAPI GdipDrawPath(GpGraphics*, GpPen*, GpPath*);
+GpStatus WINAPI GdipDrawLine(GpGraphics*, GpPen*, float, float, float, float);
 #define C2A(c) (0xFF000000u | (GetRValue(c) << 16) | (GetGValue(c) << 8) | GetBValue(c))
 // rounded-rect path (or plain rect if r<=0)
 static void swiss_round_path(GpPath* p, float x, float y, float w, float h, float r) {
@@ -715,6 +721,7 @@ typedef struct Node {
   int mt, mb, ml, mr;        // margins (outer spacing around the node)
   int rx, ry, rw, rh;        // last laid-out rect (for background painting)
   int frame; COLORREF framecol;   // draw a soft rounded border around this control (inputs)
+  int shadow;                // boxShadow → a soft drop shadow behind the panel
   COLORREF bg; int hasbg, visible;
 } Node;
 
@@ -886,9 +893,18 @@ static int g_darktheme;
 
 // paint View backgroundColor rects (containers have no HWND) — parents first,
 // so a child's bg draws over its parent's; controls then paint over the top.
+// soft drop shadow: layered translucent rounded rects offset down (fake blur)
+static void swiss_shadow(HDC hdc, RECT r, int radius) {
+  int sp = SC(2);
+  for (int i = SC(6); i >= 1; i--) {
+    RECT s = { r.left - i + sp, r.top - i + sp + SC(2), r.right + i + sp, r.bottom + i + sp + SC(2) };
+    swiss_fill_round(hdc, s, radius + i, 0x14000000u, 0, 0);   // ~8% black per layer
+  }
+}
 static void swiss_paint_bg(Node* n, HDC hdc) {
   if (n->hasbg) {
     RECT r = { n->rx, n->ry, n->rx + n->rw, n->ry + n->rh };
+    if (n->shadow) swiss_shadow(hdc, r, n->radius);            // drop shadow behind the panel
     if (n->radius > 0) swiss_fill_round(hdc, r, n->radius, C2A(n->bg), 0, 0);   // rounded card (AA)
     else { HBRUSH b = CreateSolidBrush(n->bg); FillRect(hdc, &r, b); DeleteObject(b); }
   }
@@ -934,6 +950,39 @@ static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
   return 0;
 }
 static int swiss_is_btn(HWND w) { for (int i = 0; i < g_nbtns; i++) if (g_btns[i].w == w) return 1; return 0; }
+
+// ── custom (owner-drawn) checkbox: rounded box + GDI+ checkmark ──
+static struct { HWND w; int checked; COLORREF behind, fg; } g_checks[64]; static int g_nchecks;
+static void swiss_check_style(HWND w, COLORREF behind, COLORREF fg) { if (g_nchecks < 64) { g_checks[g_nchecks].w = w; g_checks[g_nchecks].behind = behind; g_checks[g_nchecks].fg = fg; g_checks[g_nchecks].checked = 0; g_nchecks++; } }
+static int swiss_check_idx(HWND w) { for (int i = 0; i < g_nchecks; i++) if (g_checks[i].w == w) return i; return -1; }
+static void swiss_check_set(HWND w, int v) { int i = swiss_check_idx(w); if (i >= 0) { g_checks[i].checked = v ? 1 : 0; InvalidateRect(w, NULL, FALSE); } }
+static long long swiss_check_get(HWND w) { int i = swiss_check_idx(w); return i >= 0 ? g_checks[i].checked : 0; }
+static int swiss_check_draw(LPDRAWITEMSTRUCT d) {
+  int i = swiss_check_idx(d->hwndItem); if (i < 0) return 0;
+  RECT rc = d->rcItem;
+  HBRUSH bb = CreateSolidBrush(g_checks[i].behind); FillRect(d->hDC, &rc, bb); DeleteObject(bb);
+  int box = SC(18), by = rc.top + (rc.bottom - rc.top - box) / 2, chk = g_checks[i].checked;
+  RECT br = { rc.left, by, rc.left + box, by + box };
+  swiss_fill_round(d->hDC, br, SC(4), chk ? C2A(RGB(0, 102, 204)) : C2A(RGB(255, 255, 255)),
+                   chk ? C2A(RGB(0, 102, 204)) : C2A(RGB(170, 170, 170)), 1.5f);
+  if (chk) {   // white checkmark
+    GpGraphics* g = NULL; GdipCreateFromHDC(d->hDC, &g); GdipSetSmoothingMode(g, 4);
+    GpPen* pen = NULL; GdipCreatePen1(C2A(RGB(255, 255, 255)), (float)SC(2), 2, &pen);
+    if (pen && g) {
+      float x = (float)rc.left, y = (float)by, b = (float)box;
+      GdipDrawLine(g, pen, x + b * 0.26f, y + b * 0.52f, x + b * 0.44f, y + b * 0.70f);
+      GdipDrawLine(g, pen, x + b * 0.44f, y + b * 0.70f, x + b * 0.74f, y + b * 0.32f);
+    }
+    if (pen) GdipDeletePen(pen); if (g) GdipDeleteGraphics(g);
+  }
+  SetBkMode(d->hDC, TRANSPARENT); SetTextColor(d->hDC, g_checks[i].fg);
+  HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0); HGDIOBJ of = f ? SelectObject(d->hDC, f) : NULL;
+  char buf[256]; GetWindowTextA(d->hwndItem, buf, sizeof buf);
+  RECT tr = { rc.left + box + SC(8), rc.top, rc.right, rc.bottom };
+  DrawTextA(d->hDC, buf, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+  if (of) SelectObject(d->hDC, of);
+  return 1;
+}
 
 typedef struct {
 ${cells.map((c) => `  ${c.ctype} ${c.name};`).join('\n') || '  int _u;'}
@@ -1039,11 +1088,15 @@ static LRESULT CALLBACK swiss_wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       if (HIWORD(wp) == EN_SETFOCUS || HIWORD(wp) == EN_KILLFOCUS) {   // input focus ring
         g_focus = HIWORD(wp) == EN_SETFOCUS ? (HWND)lp : NULL; InvalidateRect(hwnd, NULL, FALSE);
       }
+      if (HIWORD(wp) == BN_CLICKED) {   // owner-drawn checkboxes toggle themselves
+        int _ci = swiss_check_idx((HWND)lp); if (_ci >= 0) { g_checks[_ci].checked = !g_checks[_ci].checked; InvalidateRect((HWND)lp, NULL, FALSE); }
+      }
 ${cmdCases || '      break;'}
       break;
     }
     case WM_DRAWITEM: {
       if (swiss_btn_draw((LPDRAWITEMSTRUCT)lp)) return TRUE;
+      if (swiss_check_draw((LPDRAWITEMSTRUCT)lp)) return TRUE;
       break;
     }
     case WM_SETCURSOR: {   // hand cursor over styled buttons (web cursor:pointer)

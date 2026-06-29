@@ -75,6 +75,7 @@ function emit(ast, opts) {
       else if (k === 'borderWidth') css.push(`border-width:${v}px;border-style:solid`);
       else if (k === 'borderColor') css.push(`border-color:${v}`);
       else if (k === 'borderRadius') css.push(`border-radius:${v}px`);
+      else if (k === 'boxShadow') css.push(`box-shadow:0 2px 8px rgba(0,0,0,0.18)`);
       else if (k === 'textAlign') css.push(`text-align:${v}`);
       else if (k === 'fontFamily') css.push(`font-family:${v}`);
       else if (k === 'opacity') css.push(`opacity:${v}`);
@@ -110,6 +111,7 @@ function emit(ast, opts) {
       else if (k === 'color') o.color = s;
       else if (k === 'backgroundColor' || k === 'background') o.backgroundColor = s;
       else if (k === 'borderRadius') o.borderRadius = num(s);
+      else if (k === 'boxShadow') o.boxShadow = s;
       else if (k === 'textAlign') o.textAlign = s;
       else if (k === 'flexDirection') o.flexDirection = s;
       else if (k === 'gap') o.gap = num(s);
