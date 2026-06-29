@@ -887,7 +887,11 @@ static int g_darktheme;
 // paint View backgroundColor rects (containers have no HWND) — parents first,
 // so a child's bg draws over its parent's; controls then paint over the top.
 static void swiss_paint_bg(Node* n, HDC hdc) {
-  if (n->hasbg) { RECT r = { n->rx, n->ry, n->rx + n->rw, n->ry + n->rh }; HBRUSH b = CreateSolidBrush(n->bg); FillRect(hdc, &r, b); DeleteObject(b); }
+  if (n->hasbg) {
+    RECT r = { n->rx, n->ry, n->rx + n->rw, n->ry + n->rh };
+    if (n->radius > 0) swiss_fill_round(hdc, r, n->radius, C2A(n->bg), 0, 0);   // rounded card (AA)
+    else { HBRUSH b = CreateSolidBrush(n->bg); FillRect(hdc, &r, b); DeleteObject(b); }
+  }
   for (int i = 0; i < n->nkids; i++) if (n->kids[i]->visible) swiss_paint_bg(n->kids[i], hdc);
 }
 // soft rounded border around inputs (drawn behind the inset EDIT), accent when focused
