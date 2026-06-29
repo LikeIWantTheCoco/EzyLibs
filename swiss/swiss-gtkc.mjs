@@ -784,10 +784,13 @@ static void swiss_set_theme(long long dark) {
     g_theme_prov = gtk_css_provider_new();
     gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(g_theme_prov), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION - 1);
   }
-  const char* css = dark
-    ? "window { background-color:#1e1e1e; color:#e6e6e6; } entry, textview, text { background-color:#2a2a2a; color:#e6e6e6; }"
-    : "window { background-color:#ffffff; color:#1a1a1a; } entry, textview, text { background-color:#ffffff; color:#1a1a1a; }";
+  // shape: flat, rounded, padded controls (web-like) — same in both themes
+  const char* shape = "entry, button, combobox { border-radius:4px; min-height:0; } entry { padding:4px 8px; border:1px solid #cccccc; }";
+  char* css = g_strconcat(shape, dark
+    ? " window { background-color:#1e1e1e; color:#e6e6e6; } entry, textview, text { background-color:#2a2a2a; color:#e6e6e6; } entry { border-color:#444; }"
+    : " window { background-color:#ffffff; color:#1a1a1a; } entry, textview, text { background-color:#ffffff; color:#1a1a1a; }", NULL);
   gtk_css_provider_load_from_data(g_theme_prov, css, -1, NULL);
+  g_free(css);
 }
 
 ${cells.map((c) => `static void swiss_update_${c.name}(SwissState* s);`).join('\n')}

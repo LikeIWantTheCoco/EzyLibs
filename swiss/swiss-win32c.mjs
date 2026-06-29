@@ -337,7 +337,9 @@ function emit(ast, opts) {
         out.fns.push(`static void ${cb}(SwissState* s, HWND w) {\n  (void)w;\n${lines.join('\n')}\n}`);
         id = command(cb, 'EN_CHANGE');
       }
-      out.build.push(`  s->${f} = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
+      // flat bordered input (web-like) instead of the sunken 3D CLIENTEDGE
+      out.build.push(`  s->${f} = CreateWindowExA(0, "EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
+      out.build.push(`  SendMessageA(s->${f}, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELONG(${st && st.padding != null ? Number(st.padding) : 6}, ${st && st.padding != null ? Number(st.padding) : 6}));`);
       const ph = strAttr(a.placeholder);
       if (ph) out.build.push(`  SendMessageW(s->${f}, EM_SETCUEBANNER, TRUE, (LPARAM)L${cwstr(ph)});`);
       if (cell) {
@@ -358,7 +360,7 @@ function emit(ast, opts) {
         out.fns.push(`static void ${cb}(SwissState* s, HWND w) {\n  s->${tc.name} = swiss_gettext(w); swiss_update_${tc.name}(s);\n}`);
         id = command(cb, 'EN_CHANGE');
       }
-      out.build.push(`  s->${f} = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
+      out.build.push(`  s->${f} = CreateWindowExA(0, "EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
       if (cell) {
         out.build.push(`  SetWindowTextA(s->${f}, s->${cell.name});`);
         deps[cell.name].push(`{ char* _t = swiss_gettext(s->${f}); if (strcmp(_t, s->${cell.name}) != 0) SetWindowTextA(s->${f}, s->${cell.name}); free(_t); }`);
