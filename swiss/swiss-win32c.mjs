@@ -828,7 +828,9 @@ static struct { HWND w; COLORREF c; HBRUSH b; } g_bgs[64]; static int g_nbgs;
 static void swiss_set_bg(HWND w, COLORREF c) { if (g_nbgs < 64) { g_bgs[g_nbgs].w = w; g_bgs[g_nbgs].c = c; g_bgs[g_nbgs].b = CreateSolidBrush(c); g_nbgs++; } }
 static int swiss_get_bg(HWND w, COLORREF* c, HBRUSH* b) { for (int i = 0; i < g_nbgs; i++) if (g_bgs[i].w == w) { *c = g_bgs[i].c; *b = g_bgs[i].b; return 1; } return 0; }
 
-static HBRUSH g_white;   // window/control background (web-like white)
+static HBRUSH g_white;   // themeable window/control background brush
+static COLORREF g_bgcol = RGB(255, 255, 255), g_fgcol = RGB(26, 26, 26);   // light default
+static int g_darktheme;
 
 // paint View backgroundColor rects (containers have no HWND) — parents first,
 // so a child's bg draws over its parent's; controls then paint over the top.
@@ -928,7 +930,14 @@ static char* swiss_pick_file(void) {
   ofn.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY; if (!GetOpenFileNameA(&ofn)) buf[0] = 0;
   return swiss_strdup(buf);
 }
-static void swiss_set_theme(long long light) { (void)light; /* no-op on win32 v0.1 */ }
+static void swiss_set_theme(long long dark) {
+  g_darktheme = dark ? 1 : 0;
+  g_bgcol = dark ? RGB(30, 30, 30) : RGB(255, 255, 255);
+  g_fgcol = dark ? RGB(230, 230, 230) : RGB(26, 26, 26);
+  if (g_white) DeleteObject(g_white);
+  g_white = CreateSolidBrush(g_bgcol);
+  if (g_main) { SetClassLongPtrA(g_main, GCLP_HBRBACKGROUND, (LONG_PTR)g_white); InvalidateRect(g_main, NULL, TRUE); }
+}
 
 ${cells.map((c) => `static void swiss_update_${c.name}(SwissState* s);`).join('\n')}
 
@@ -983,12 +992,12 @@ ${cmdCases || '      break;'}
     }
     case WM_CTLCOLORSTATIC: case WM_CTLCOLORBTN: {
       COLORREF col, bgc; HBRUSH bgb; HDC dc = (HDC)wp;
-      if (swiss_get_color((HWND)lp, &col)) SetTextColor(dc, col);
-      // opaque fill with the control's bg (own/inherited panel color, else white)
-      // so static text is correct without transparency — lets WS_CLIPCHILDREN
-      // suppress repaint flicker
+      SetTextColor(dc, swiss_get_color((HWND)lp, &col) ? col : g_fgcol);   // explicit color, else theme fg
+      // opaque fill with the control's bg (own/inherited panel color, else the
+      // theme background) so static text is correct without transparency — lets
+      // WS_CLIPCHILDREN suppress repaint flicker
       if (swiss_get_bg((HWND)lp, &bgc, &bgb)) { SetBkColor(dc, bgc); SetBkMode(dc, OPAQUE); return (LRESULT)bgb; }
-      SetBkColor(dc, RGB(255, 255, 255)); SetBkMode(dc, OPAQUE); return (LRESULT)g_white;
+      SetBkColor(dc, g_bgcol); SetBkMode(dc, OPAQUE); return (LRESULT)g_white;
     }
     case WM_SIZE: swiss_relayout(); return 0;
     case WM_DESTROY: PostQuitMessage(0); return 0;
@@ -1005,7 +1014,7 @@ ${refs.map((r) => `  S.${r.name}__current = ${r.cinit};`).join('\n')}
   swiss_init(&S);
   WNDCLASSA wc; memset(&wc, 0, sizeof wc);
   wc.lpfnWndProc = swiss_wndproc; wc.hInstance = hi; wc.lpszClassName = "SwissWindow";
-  g_white = CreateSolidBrush(RGB(255, 255, 255));
+  swiss_set_theme(0);   // light default (creates g_white from the theme bg)
   wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = g_white;
   RegisterClassA(&wc);
   g_main = CreateWindowExA(0, "SwissWindow", ${cstr(opts.title || 'Swiss')},

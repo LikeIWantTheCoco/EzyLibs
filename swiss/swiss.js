@@ -18,8 +18,18 @@ const renderer = makeRenderer(webHost);
 // the browser default is serif, so set a sans-serif stack on the root.
 const SWISS_FONT = "'Segoe UI', system-ui, -apple-system, Roboto, 'Helvetica Neue', Arial, sans-serif";
 
+// dark/light theme toggle — light is the default on every target. setTheme(dark)
+// flips the root colors (the native targets compile this to swiss_set_theme).
+export function setTheme(dark) {
+  const el = (typeof document !== 'undefined') && (document.getElementById('root') || document.body);
+  if (!el) return;
+  el.style.backgroundColor = dark ? '#1e1e1e' : '#ffffff';
+  el.style.color = dark ? '#e6e6e6' : '#1a1a1a';
+}
+
 export function render(element, container, opts) {
   if (container) { container.style.fontFamily = SWISS_FONT; container.style.fontSize = '15px'; }
+  setTheme(false);   // light default
   if (opts && opts.backend) {
     connectEzy(opts.backend, opts.sigs || {}).then((impl) => {
       setBackend(impl);
@@ -36,4 +46,4 @@ export { View, Text, Button, Input, FlatList, ScrollView } from './swiss-compone
 export { StyleSheet } from './swiss-stylesheet.js';
 
 import { native } from './swiss-native.js';
-export default { render, ezy, native };
+export default { render, ezy, native, setTheme };

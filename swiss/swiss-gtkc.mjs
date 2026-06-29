@@ -775,8 +775,19 @@ static long long swiss_confirm(const char* msg) {
   int r = gtk_dialog_run(GTK_DIALOG(d)); gtk_widget_destroy(d);
   return r == GTK_RESPONSE_YES ? 1 : 0;
 }
-static void swiss_set_theme(long long light) {
-  g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme", (gboolean)!light, NULL);
+// theme: a swappable CSS provider forcing a light (default) or dark base, so
+// the app looks the same regardless of the system GTK theme.
+static GtkCssProvider* g_theme_prov;
+static void swiss_set_theme(long long dark) {
+  g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme", (gboolean)dark, NULL);
+  if (!g_theme_prov) {
+    g_theme_prov = gtk_css_provider_new();
+    gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(g_theme_prov), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION - 1);
+  }
+  const char* css = dark
+    ? "window { background-color:#1e1e1e; color:#e6e6e6; } entry, textview, text { background-color:#2a2a2a; color:#e6e6e6; }"
+    : "window { background-color:#ffffff; color:#1a1a1a; } entry, textview, text { background-color:#ffffff; color:#1a1a1a; }";
+  gtk_css_provider_load_from_data(g_theme_prov, css, -1, NULL);
 }
 
 ${cells.map((c) => `static void swiss_update_${c.name}(SwissState* s);`).join('\n')}

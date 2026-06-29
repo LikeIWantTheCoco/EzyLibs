@@ -309,6 +309,10 @@ export function createFrontend(ast, opts) {
           return { c: `swiss_confirm(${a})`, t: 'bool' };
         }
         if (c.type === 'MemberExpression' && c.object.name === 'console') return { c: '((void)0)', t: 'void' };
+        if (c.type === 'Identifier' && c.name === 'setTheme') {   // setTheme(dark) — dark/light toggle
+          const a = node.arguments[0] ? cexpr(node.arguments[0], scope).c : '0';
+          return { c: `swiss_set_theme(${a})`, t: 'void' };
+        }
         if (c.type === 'MemberExpression' && c.object.name === 'Math') {
           const A = node.arguments.map((x) => cexpr(x, scope).c);
           const m = c.property.name;
