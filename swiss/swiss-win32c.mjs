@@ -810,20 +810,23 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
   n->rx = x; n->ry = y; n->rw = w; n->rh = h;   // remember rect for bg painting
   if (n->hwnd) {
     if (moved) {
-      int in = n->frame ? SC(3) : 0;   // inset framed inputs so the drawn border ring shows
-      MoveWindow(n->hwnd, x + in, y + in, w - 2 * in, h - 2 * in, TRUE);
-      if (n->frame) {   // vertically centre the single-line text/placeholder (like GTK)
-        RECT er; GetClientRect(n->hwnd, &er);
+      if (n->frame) {
+        // EM_SETRECT is ignored by single-line edits, so to vertically centre the
+        // text/placeholder (like GTK) size the EDIT to a text-height strip and
+        // centre that strip inside the framed box; its single line then sits mid-box.
+        int in = SC(3);
         HDC dc = GetDC(n->hwnd); HFONT fo = (HFONT)SendMessageA(n->hwnd, WM_GETFONT, 0, 0);
         HGDIOBJ oo = fo ? SelectObject(dc, fo) : NULL; TEXTMETRICA tm; GetTextMetricsA(dc, &tm);
         if (oo) SelectObject(dc, oo); ReleaseDC(n->hwnd, dc);
-        int top = (er.bottom - tm.tmHeight) / 2; if (top < 0) top = 0;
-        er.top = top; SendMessageA(n->hwnd, EM_SETRECTNP, 0, (LPARAM)&er);
+        int ih = tm.tmHeight + SC(4); int maxh = h - 2 * in; if (ih > maxh) ih = maxh;
+        MoveWindow(n->hwnd, x + in, y + (h - ih) / 2, w - 2 * in, ih, TRUE);
+      } else {
+        MoveWindow(n->hwnd, x, y, w, h, TRUE);
+        // borderRadius → clip the control to a rounded rect. Owner-drawn buttons
+        // and pills skip this — corners come from the GDI+ drawing.
+        if (n->radius > 0 && !swiss_is_btn(n->hwnd) && !swiss_is_pill(n->hwnd))
+          SetWindowRgn(n->hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, n->radius * 2, n->radius * 2), TRUE);
       }
-      // borderRadius → clip the control to a rounded rect. Owner-drawn buttons
-      // and framed inputs skip this — corners come from the GDI+ drawing.
-      if (n->radius > 0 && !n->frame && !swiss_is_btn(n->hwnd) && !swiss_is_pill(n->hwnd))
-        SetWindowRgn(n->hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, n->radius * 2, n->radius * 2), TRUE);
     }
     return;
   }
@@ -982,7 +985,7 @@ static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
     // of its own color when colored, a neutral gray when plain, accent when focused
     ARGB border = focus ? C2A(RGB(0, 102, 204)) : plain ? C2A(RGB(205, 208, 212)) : C2A(swiss_darken(bg, 82));
     // GTK-like bevel: a subtle vertical gradient (lighter top → base/darker bottom)
-    swiss_fill_round_grad(d->hDC, d->rcItem, r, C2A(swiss_lighten(bg, 110)), C2A(swiss_darken(bg, 96)), border, focus ? 2.0f : 1.0f);
+    swiss_fill_round_grad(d->hDC, d->rcItem, r, C2A(swiss_lighten(bg, 120)), C2A(swiss_darken(bg, 86)), border, focus ? 2.0f : 1.0f);
     SetBkColor(d->hDC, bg); SetBkMode(d->hDC, OPAQUE);   // opaque over the solid fill → subpixel ClearType text
     SetTextColor(d->hDC, g_btns[i].hasfg ? g_btns[i].fg : GetSysColor(COLOR_BTNTEXT));
     HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0);
