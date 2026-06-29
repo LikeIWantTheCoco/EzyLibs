@@ -12,6 +12,7 @@
     "swiss-bridge.js",
     "swiss-gtkc.mjs",
     "swiss-win32c.mjs",
+    "swiss-jsx-core.mjs",
     "swiss-sig.mjs",
     "swiss-winsdk.mjs",
     "swiss-winshim.c",
