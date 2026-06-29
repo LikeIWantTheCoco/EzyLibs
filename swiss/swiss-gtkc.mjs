@@ -14,536 +14,21 @@
 //   + swiss.setTheme().
 //
 // Usage:  node swiss-gtkc.mjs App.jsx --out frontend.c [--title T] [--sig sig.json]
-import { parse } from '@babel/parser';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-
-function err(msg, node) {
-  const loc = node && node.loc ? ` (line ${node.loc.start.line})` : '';
-  throw new Error(`swiss-gtkc: ${msg}${loc}`);
-}
-function cstr(s) {
-  return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';
-}
-const cType = (t) => (t === 'float' ? 'double' : t === 'string' ? 'const char*' : t === 'void' ? 'void' : 'long long');
-
-function walk(node, fn) {
-  if (!node || typeof node.type !== 'string') return;
-  fn(node);
-  for (const k in node) {
-    if (k === 'loc' || k === 'start' || k === 'end' || k === 'leadingComments' || k === 'trailingComments') continue;
-    const v = node[k];
-    if (Array.isArray(v)) v.forEach((c) => c && typeof c.type === 'string' && walk(c, fn));
-    else if (v && typeof v.type === 'string') walk(v, fn);
-  }
-}
-
-// ───────────────────────── declarations ─────────────────────────
-function collectStyles(ast) {
-  const styles = {};
-  for (const n of ast.program.body)
-    walk(n, (node) => {
-      if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' &&
-          node.callee.object.name === 'StyleSheet' && node.callee.property.name === 'create') {
-        for (const p of node.arguments[0].properties) styles[p.key.name || p.key.value] = objLiteral(p.value);
-      }
-    });
-  return styles;
-}
-function objLiteral(node) {
-  const out = {};
-  for (const p of node.properties) {
-    const v = p.value;
-    out[p.key.name || p.key.value] =
-      v.type === 'NumericLiteral' ? v.value :
-      v.type === 'StringLiteral' ? v.value :
-      v.type === 'UnaryExpression' && v.operator === '-' ? -v.argument.value : null;
-  }
-  return out;
-}
-function findComponent(ast) {
-  for (const n of ast.program.body)
-    if (n.type === 'ExportDefaultDeclaration') {
-      const d = n.declaration;
-      if (d.type === 'FunctionDeclaration' || d.type === 'ArrowFunctionExpression' || d.type === 'FunctionExpression') return d;
-      // `export default Name;` → resolve the identifier to its declaration
-      if (d.type === 'Identifier') {
-        for (const m of ast.program.body) {
-          if (m.type === 'FunctionDeclaration' && m.id && m.id.name === d.name) return m;
-          if (m.type === 'VariableDeclaration')
-            for (const v of m.declarations)
-              if (v.id.name === d.name && v.init && (v.init.type === 'ArrowFunctionExpression' || v.init.type === 'FunctionExpression')) return v.init;
-        }
-      }
-    }
-  err('no default-exported function component found');
-}
+import { parse, walk, cstr, cType, stripParens, createFrontend } from './swiss-jsx-core.mjs';
 
 // ───────────────────────── emit ─────────────────────────
 function emit(ast, opts) {
-  const sigs = opts.sigs || {};
-  const styles = collectStyles(ast);
-  const comp = findComponent(ast);
-
-  // state cells: useState(init) → {name,setter,ctype,cinit,t}
-  const cells = [];
-  // component-level helper methods: const f = (a,b) => {…}
-  const methods = [];
-  const refs = []; // useRef cells (mutable .current)
-  const derived = {}; // top-level `const x = expr` derived values (inlined, reactive)
-  for (const stmt of comp.body.body) {
-    if (stmt.type !== 'VariableDeclaration') continue;
-    for (const d of stmt.declarations) {
-      const init = d.init;
-      if (init && init.type === 'CallExpression' && init.callee.name === 'useState') {
-        const [valId, setId] = d.id.elements;
-        const setName = setId ? setId.name : '__noset_' + valId.name;   // read-only state: const [x] = useState(...)
-        const a = init.arguments[0];
-        let t = 'int', ctype = 'long long', cinit = '0', initNode = null, initObj = null, initArr = null;
-        if (a) {
-          if (a.type === 'StringLiteral') { t = 'string'; ctype = 'const char*'; cinit = cstr(a.value); }
-          else if (a.type === 'BooleanLiteral') { t = 'bool'; cinit = a.value ? '1' : '0'; }
-          else if (a.type === 'NumericLiteral') { if (Number.isInteger(a.value)) cinit = String(a.value); else { t = 'float'; ctype = 'double'; cinit = String(a.value); } }
-          else if (a.type === 'ArrayExpression') { t = 'array'; ctype = null; cinit = null; initArr = a; } // array-of-records state
-          else if (a.type === 'ObjectExpression') { t = 'object'; ctype = null; cinit = null; initObj = a; } // object record state
-          else { // non-literal init (e.g. ezy.call) → assigned in swiss_init
-            initNode = a;
-            if (a.type === 'CallExpression' && a.callee.type === 'MemberExpression' && a.callee.object.name === 'ezy') {
-              const r = sigs[a.arguments[0].value] ? sigs[a.arguments[0].value].ret : 'int';
-              t = r === 'string' ? 'string' : r === 'float' ? 'float' : 'int'; ctype = cType(t);
-            }
-          }
-        }
-        cells.push({ name: valId.name, setter: setName, ctype, cinit, t, initNode, initObj, initArr });
-      } else if (init && init.type === 'CallExpression' && init.callee.name === 'useMemo') {
-        // derived value: const x = useMemo(() => expr, [deps]) → recomputed cell
-        const arrow = init.arguments[0];
-        const vb = arrow.body;
-        const valExpr = vb.type === 'BlockStatement' ? (vb.body.find((s) => s.type === 'ReturnStatement') || {}).argument : vb;
-        const memoDeps = init.arguments[1] && init.arguments[1].type === 'ArrayExpression'
-          ? init.arguments[1].elements.filter((e) => e.type === 'Identifier').map((e) => e.name) : [];
-        cells.push({ name: d.id.name, setter: '__memo_' + d.id.name, ctype: 'long long', cinit: null, t: 'int', initNode: valExpr, isMemo: true, memoDeps });
-      } else if (init && init.type === 'CallExpression' && init.callee.name === 'useCallback') {
-        methods.push({ name: d.id.name, node: init.arguments[0] });
-      } else if (init && init.type === 'CallExpression' && init.callee.name === 'useRef') {
-        const a = init.arguments[0];
-        let rt = 'int', rc = 'long long', ci = '0';
-        if (a) {
-          if (a.type === 'StringLiteral') { rt = 'string'; rc = 'const char*'; ci = cstr(a.value); }
-          else if (a.type === 'NullLiteral') { rt = 'widget'; rc = 'GtkWidget*'; ci = 'NULL'; }
-          else if (a.type === 'NumericLiteral') { ci = String(a.value); }
-        }
-        refs.push({ name: d.id.name, t: rt, ctype: rc, cinit: ci });
-      } else if (init && (init.type === 'ArrowFunctionExpression' || init.type === 'FunctionExpression')) {
-        methods.push({ name: d.id.name, node: init });
-      } else if (init && d.id.type === 'Identifier') {
-        derived[d.id.name] = init; // derived value: inlined where used, reactive via its cells
-      }
-    }
-  }
-  const cellByName = (n) => cells.find((c) => c.name === n);
-  const cellBySetter = (n) => cells.find((c) => c.setter === n);
-  const methodByName = (n) => methods.find((m) => m.name === n);
-  const refByName = (n) => refs.find((r) => r.name === n);
-
-  // custom (presentational) components defined at module level — inlined on use
-  const returnsJSX = (fn) => {
-    const isJ = (x) => x && (x.type === 'JSXElement' || x.type === 'JSXFragment' || (x.type === 'ParenthesizedExpression' && isJ(x.expression)));
-    return fn.body.type === 'BlockStatement' ? fn.body.body.some((s) => s.type === 'ReturnStatement' && isJ(s.argument)) : isJ(fn.body);
-  };
-  const components = [];
-  for (const n of ast.program.body) {
-    if (n.type === 'ExportDefaultDeclaration') continue;
-    if (n.type === 'FunctionDeclaration' && n.id && returnsJSX(n)) components.push({ name: n.id.name, node: n });
-    if (n.type === 'VariableDeclaration')
-      for (const d of n.declarations)
-        if (d.init && (d.init.type === 'ArrowFunctionExpression' || d.init.type === 'FunctionExpression') && returnsJSX(d.init))
-          components.push({ name: d.id.name, node: d.init });
-  }
-  const componentByName = (n) => components.find((c) => c.name === n);
-
-  // array-of-records state: infer element shape from object literals in setX(...)
-  const tInfer = (node) => {
-    if (!node) return 'int';
-    try { const t = cexpr(node, {}).t; if (t && t !== 'void') return t; } catch (e) { /* fall back */ }
-    if (node.type === 'StringLiteral') return 'string';
-    if (node.type === 'BooleanLiteral') return 'bool';
-    if (node.type === 'NumericLiteral') return Number.isInteger(node.value) ? 'int' : 'float';
-    if (node.type === 'Identifier') { const c = cellByName(node.name); return c ? c.t : 'int'; }
-    if (node.type === 'CallExpression') {
-      if (node.callee.name === 'str') return 'string';
-      if (node.callee.type === 'MemberExpression' && node.callee.object.name === 'ezy') { const r = sigs[node.arguments[0].value]; return r ? (r.ret === 'string' ? 'string' : r.ret === 'float' ? 'float' : 'int') : 'int'; }
-    }
-    return 'int';
-  };
-  for (const c of cells.filter((x) => x.t === 'array')) {
-    const fields = {};
-    const collectObj = (o) => { for (const p of o.properties) if ((p.type === 'ObjectProperty' || p.type === 'Property') && p.key) { const k = p.key.name || p.key.value; if (!(k in fields)) fields[k] = tInfer(p.value); } };
-    if (c.initArr) for (const el of c.initArr.elements) if (el && el.type === 'ObjectExpression') collectObj(el);  // shape from the initial array
-    walk(comp, (n) => {
-      if (n.type === 'CallExpression' && n.callee.type === 'Identifier' && n.callee.name === c.setter)
-        walk(n, (o) => { if (o.type === 'ObjectExpression') collectObj(o); });
-    });
-    c.fields = Object.keys(fields).map((k) => ({ name: k, t: fields[k], ctype: cType(fields[k]) }));
-    c.struct = `Item_${c.name}`; c.arrtype = `Arr_${c.name}`; c.ctype = c.arrtype;
-  }
-  const arrayCells = cells.filter((c) => c.t === 'array');
-  // object record state: infer shape from init {…} + setX({…}) literals
-  for (const c of cells.filter((x) => x.t === 'object')) {
-    const fields = {};
-    const collect = (obj) => { for (const p of obj.properties) if ((p.type === 'ObjectProperty' || p.type === 'Property') && p.key) { const k = p.key.name || p.key.value; if (!(k in fields)) fields[k] = tInfer(p.value); } };
-    if (c.initObj) collect(c.initObj);
-    walk(comp, (n) => { if (n.type === 'CallExpression' && n.callee.type === 'Identifier' && n.callee.name === c.setter) walk(n, (o) => { if (o.type === 'ObjectExpression') collect(o); }); });
-    c.fields = Object.keys(fields).map((k) => ({ name: k, t: fields[k], ctype: cType(fields[k]) }));
-    c.struct = `Obj_${c.name}`; c.ctype = c.struct;
-  }
-  const objectCells = cells.filter((c) => c.t === 'object');
-
-  // dependency snippets per cell (run by swiss_update_<cell>)
-  const deps = {}; cells.forEach((c) => (deps[c.name] = []));
-  // useMemo: infer type + register recompute on each dep cell change
-  for (const c of cells.filter((x) => x.isMemo)) {
-    const v = cexpr(c.initNode, {});
-    c.t = v.t === 'void' ? 'int' : v.t; c.ctype = cType(c.t);
-    for (const dn of c.memoDeps) if (deps[dn]) deps[dn].push(`s->${c.name} = ${v.c}; swiss_update_${c.name}(s);`);
-  }
-  const stateFields = [];     // extra GtkWidget* / data fields in SwissState
-  const out = { updates: [], fns: [], build: [], css: [], externs: new Set(), lists: [], postShow: [] };
-  let uid = 0; const vid = (p) => `${p}${uid++}`;
+  const F = createFrontend(ast, { sigs: opts.sigs || {}, tag: 'swiss-gtkc', widgetType: 'GtkWidget*' });
+  const {
+    err, sigs, styles, comp, cells, methods, refs, derived, components,
+    cellByName, cellBySetter, methodByName, refByName, componentByName,
+    arrayCells, objectCells, deps, out, stateFields, vid,
+    cexpr, genStmt, genStmts, genArraySet, objLit, emitMethods, handlerBody,
+    cellsIn, jsxOf, rootJSX,
+  } = F;
+  out.css = [];
   const cssClasses = {}; let cssN = 0;
-
-  // ── expression: returns { c, t } ──
-  function cexpr(node, scope) {
-    switch (node.type) {
-      case 'NumericLiteral': return { c: String(node.value), t: 'int' };
-      case 'StringLiteral': return { c: cstr(node.value), t: 'string' };
-      case 'BooleanLiteral': return { c: node.value ? '1' : '0', t: 'bool' };
-      case 'Identifier': {
-        if (scope[node.name]) return { c: scope[node.name].c, t: scope[node.name].t };
-        const cell = cellByName(node.name);
-        if (cell) return { c: 's->' + cell.name, t: cell.t };
-        if (derived[node.name]) return cexpr(derived[node.name], scope); // inline derived value
-        err(`unknown identifier '${node.name}'`, node);
-        break;
-      }
-      case 'ParenthesizedExpression': return cexpr(node.expression, scope);
-      case 'OptionalMemberExpression':
-      case 'MemberExpression': {
-        // event value: e.target.value inside an Input onChange arrow
-        if (node.property.name === 'value' && node.object.type === 'MemberExpression' && node.object.property.name === 'target' && scope.__evtext)
-          return { c: scope.__evtext, t: 'string' };
-        // useRef .current
-        if (node.property.name === 'current' && node.object.type === 'Identifier' && refByName(node.object.name)) {
-          const r = refByName(node.object.name); return { c: `s->${r.name}__current`, t: r.t === 'widget' ? 'int' : r.t };
-        }
-        // record field: it.field where scope[it].rec is set by .map/.filter
-        if (node.object.type === 'Identifier' && scope[node.object.name] && scope[node.object.name].rec) {
-          const r = scope[node.object.name]; const f = (r.shape || []).find((x) => x.name === node.property.name);
-          return { c: `${r.rec}.${node.property.name}`, t: f ? f.t : 'int' };
-        }
-        // array.length
-        if (node.object.type === 'Identifier' && cellByName(node.object.name) && cellByName(node.object.name).t === 'array' && node.property.name === 'length')
-          return { c: `s->${node.object.name}.len`, t: 'int' };
-        // arr.filter(pred).length → filtered count (GCC statement expression)
-        if (node.property.name === 'length' && node.object.type === 'CallExpression' && node.object.callee.type === 'MemberExpression' &&
-            node.object.callee.property.name === 'filter' && node.object.callee.object.type === 'Identifier' &&
-            cellByName(node.object.callee.object.name) && cellByName(node.object.callee.object.name).t === 'array') {
-          const cell = cellByName(node.object.callee.object.name); const arrow = node.object.arguments[0];
-          const fs = {}; if (arrow.params[0]) fs[arrow.params[0].name] = { rec: `s->${cell.name}.data[_i]`, shape: cell.fields };
-          return { c: `({ long long _c = 0; for (long long _i = 0; _i < s->${cell.name}.len; _i++) if (${cexpr(stripParens(arrow.body), fs).c}) _c++; _c; })`, t: 'int' };
-        }
-        // object-cell field: obj.field
-        if (node.object.type === 'Identifier' && cellByName(node.object.name) && cellByName(node.object.name).t === 'object') {
-          const oc = cellByName(node.object.name); const f = (oc.fields || []).find((x) => x.name === node.property.name);
-          return { c: `s->${oc.name}.${node.property.name}`, t: f ? f.t : 'int' };
-        }
-        // props.x inside an inlined component
-        if (node.object.name === 'props' && scope.__props && scope.__props[node.property.name]) return scope.__props[node.property.name];
-        if (node.property.name === 'length') { const o = cexpr(node.object, scope); return { c: `((long long)strlen(${o.c}))`, t: 'int' }; }
-        err('unsupported member access', node); break;
-      }
-      case 'ConditionalExpression': {
-        const test = cexpr(node.test, scope);
-        const a = cexpr(node.consequent, scope), b = cexpr(node.alternate, scope);
-        return { c: `(${test.c} ? ${a.c} : ${b.c})`, t: a.t === 'void' ? b.t : a.t };
-      }
-      case 'UnaryExpression': {
-        const a = cexpr(node.argument, scope);
-        if (node.operator === '!') return { c: `(!${a.c})`, t: 'bool' };
-        if (node.operator === '-') return { c: `(-${a.c})`, t: a.t };
-        err(`unsupported unary '${node.operator}'`, node); break;
-      }
-      case 'LogicalExpression': {
-        const l = cexpr(node.left, scope), r = cexpr(node.right, scope);
-        if (node.operator === '??') return { c: `(${l.c} ? ${l.c} : ${r.c})`, t: r.t };
-        return { c: `(${l.c} ${node.operator === '&&' ? '&&' : '||'} ${r.c})`, t: 'bool' };
-      }
-      case 'BinaryExpression': {
-        const l = cexpr(node.left, scope), r = cexpr(node.right, scope);
-        let op = node.operator === '===' ? '==' : node.operator === '!==' ? '!=' : node.operator;
-        // `+` with any string operand → concat (coercing the other side to text)
-        if (op === '+' && (l.t === 'string' || r.t === 'string')) {
-          const S = (x) => x.t === 'string' ? x.c : x.t === 'float' ? `g_strdup_printf("%g", (double)(${x.c}))` : `g_strdup_printf("%lld", (long long)(${x.c}))`;
-          return { c: `swiss_concat(${S(l)}, ${S(r)})`, t: 'string' };
-        }
-        if ((op === '==' || op === '!=') && (l.t === 'string' || r.t === 'string')) return { c: `(strcmp(${l.c}, ${r.c}) ${op} 0)`, t: 'bool' };
-        if (op === '**') return { c: `((long long)pow((double)(${l.c}), (double)(${r.c})))`, t: 'int' };
-        const t = ['==', '!=', '<', '>', '<=', '>='].includes(op) ? 'bool' : (l.t === 'float' || r.t === 'float') ? 'float' : 'int';
-        return { c: `(${l.c} ${op} ${r.c})`, t };
-      }
-      case 'TemplateLiteral': {
-        let fmt = ''; const args = [];
-        node.quasis.forEach((q, i) => {
-          fmt += q.value.cooked.replace(/%/g, '%%');
-          if (i < node.expressions.length) {
-            const e = cexpr(node.expressions[i], scope);
-            fmt += e.t === 'string' ? '%s' : e.t === 'float' ? '%g' : '%lld';
-            args.push(e.t === 'string' ? e.c : e.t === 'float' ? `(double)(${e.c})` : `(long long)(${e.c})`);
-          }
-        });
-        return { c: `g_strdup_printf(${cstr(fmt)}${args.length ? ', ' + args.join(', ') : ''})`, t: 'string' };
-      }
-      case 'OptionalCallExpression':
-      case 'CallExpression': {
-        const c = node.callee;
-        // builtins int()/str()/parseInt/parseFloat/Number
-        if (c.type === 'Identifier' && (c.name === 'int' || c.name === 'parseInt')) {
-          const a = cexpr(node.arguments[0], scope);
-          return { c: a.t === 'string' ? `atoll(${a.c})` : `((long long)${a.c})`, t: 'int' };
-        }
-        if (c.type === 'Identifier' && c.name === 'parseFloat') {
-          const a = cexpr(node.arguments[0], scope);
-          return { c: a.t === 'string' ? `atof(${a.c})` : `((double)${a.c})`, t: 'float' };
-        }
-        if (c.type === 'Identifier' && c.name === 'Number') {
-          const a = cexpr(node.arguments[0], scope);
-          return { c: a.t === 'string' ? `atoll(${a.c})` : `(${a.c})`, t: 'int' };
-        }
-        if (c.type === 'Identifier' && c.name === 'str') {
-          const a = cexpr(node.arguments[0], scope);
-          return { c: `g_strdup_printf("%lld", (long long)(${a.c}))`, t: 'string' };
-        }
-        // browser globals: alert/confirm (bare) → dialog; console.* → no-op
-        if (c.type === 'Identifier' && c.name === 'alert') {
-          const a = node.arguments[0] ? cexpr(node.arguments[0], scope) : { c: '""' };
-          return { c: `swiss_alert(${a.t === 'string' ? a.c : `g_strdup_printf("%lld", (long long)(${a.c}))`})`, t: 'void' };
-        }
-        if (c.type === 'Identifier' && c.name === 'confirm') {
-          const a = node.arguments[0] ? cexpr(node.arguments[0], scope).c : '""';
-          return { c: `swiss_confirm(${a})`, t: 'bool' };
-        }
-        if (c.type === 'MemberExpression' && c.object.name === 'console') return { c: '((void)0)', t: 'void' };
-        // Math.*
-        if (c.type === 'MemberExpression' && c.object.name === 'Math') {
-          const A = node.arguments.map((x) => cexpr(x, scope).c);
-          const m = c.property.name;
-          const mm = { floor: 'floor', ceil: 'ceil', round: 'round', abs: 'fabs', sqrt: 'sqrt', pow: 'pow', min: 'fmin', max: 'fmax' }[m];
-          if (mm) return { c: `((long long)${mm}(${A.map((x) => `(double)(${x})`).join(', ')}))`, t: 'int' };
-          if (m === 'random') return { c: `(rand() / (double)RAND_MAX)`, t: 'float' };
-        }
-        // ezy.call('fn', args…)
-        if (c.type === 'MemberExpression' && c.object.name === 'ezy' && c.property.name === 'call') {
-          const fn = node.arguments[0].value;
-          out.externs.add(fn);
-          const args = node.arguments.slice(1).map((a) => cexpr(a, scope).c);
-          const ret = sigs[fn] ? sigs[fn].ret : 'int';
-          return { c: `${fn}(${args.join(', ')})`, t: ret === 'string' ? 'string' : ret === 'void' ? 'void' : 'int' };
-        }
-        // swiss.* host builtins
-        if (c.type === 'MemberExpression' && c.object.name === 'swiss') {
-          if (c.property.name === 'pickFolder') return { c: 'swiss_pick_folder()', t: 'string' };
-          if (c.property.name === 'pickFile') return { c: 'swiss_pick_file()', t: 'string' };
-          if (c.property.name === 'setTheme') return { c: `swiss_set_theme(${cexpr(node.arguments[0], scope).c})`, t: 'void' };
-          if (c.property.name === 'alert') return { c: `swiss_alert(${cexpr(node.arguments[0], scope).c})`, t: 'void' };
-          if (c.property.name === 'confirm') return { c: `swiss_confirm(${cexpr(node.arguments[0], scope).c})`, t: 'bool' };
-        }
-        // timers: setInterval/setTimeout(fn, ms) → g_timeout_add; clearInterval(id)
-        if (c.type === 'Identifier' && (c.name === 'setInterval' || c.name === 'setTimeout')) {
-          const tl = []; genStmts(node.arguments[0].body, { ...scope }, tl);
-          const id = `timer_${hN++}`;
-          out.fns.push(`static gboolean ${id}(gpointer ud) {\n  SwissState* s = (SwissState*)ud; (void)s;\n${tl.join('\n')}\n  return ${c.name === 'setInterval' ? 'G_SOURCE_CONTINUE' : 'G_SOURCE_REMOVE'};\n}`);
-          return { c: `g_timeout_add(${cexpr(node.arguments[1], scope).c}, ${id}, &S)`, t: 'int' };
-        }
-        if (c.type === 'Identifier' && (c.name === 'clearInterval' || c.name === 'clearTimeout'))
-          return { c: `g_source_remove(${cexpr(node.arguments[0], scope).c})`, t: 'void' };
-        // string methods
-        if (c.type === 'MemberExpression') {
-          const recv = cexpr(c.object, scope), m = c.property.name;
-          const a0 = node.arguments[0] ? cexpr(node.arguments[0], scope).c : null;
-          const a1 = node.arguments[1] ? cexpr(node.arguments[1], scope).c : null;
-          if (m === 'trim') return { c: `g_strstrip(g_strdup(${recv.c}))`, t: 'string' };
-          if (m === 'toUpperCase') return { c: `g_ascii_strup(${recv.c}, -1)`, t: 'string' };
-          if (m === 'toLowerCase') return { c: `g_ascii_strdown(${recv.c}, -1)`, t: 'string' };
-          if (m === 'includes') return { c: `(strstr(${recv.c}, ${a0}) != NULL)`, t: 'bool' };
-          if (m === 'startsWith') return { c: `g_str_has_prefix(${recv.c}, ${a0})`, t: 'bool' };
-          if (m === 'endsWith') return { c: `g_str_has_suffix(${recv.c}, ${a0})`, t: 'bool' };
-          if (m === 'indexOf') return { c: `swiss_indexof(${recv.c}, ${a0})`, t: 'int' };
-          if (m === 'substring' || m === 'slice') return { c: `swiss_substr(${recv.c}, ${a0}, ${a1 || '-1'})`, t: 'string' };
-          if (m === 'replace' || m === 'replaceAll') return { c: `swiss_replace(${recv.c}, ${a0}, ${a1})`, t: 'string' };
-          if (m === 'repeat') return { c: `g_strnfill(0, ' ')`, t: 'string' }; // (rare; placeholder)
-        }
-        err('unsupported call expression', node); break;
-      }
-      default: err(`unsupported expression '${node.type}'`, node);
-    }
-  }
-
-  // ── statement list → C lines ──
-  function genStmts(body, scope, lines) {
-    const stmts = body.type === 'BlockStatement' ? body.body
-      : /Statement$/.test(body.type) ? [body]
-      : [{ type: 'ExpressionStatement', expression: body }];
-    for (const st of stmts) genStmt(st, scope, lines);
-  }
-  function genStmt(st, scope, lines) {
-    if (st.type === 'VariableDeclaration') {
-      for (const d of st.declarations) {
-        const v = cexpr(d.init, scope);
-        scope[d.id.name] = { c: d.id.name, t: v.t };
-        lines.push(`  ${cType(v.t === 'bool' ? 'int' : v.t)} ${d.id.name} = ${v.c};`);
-      }
-      return;
-    }
-    if (st.type === 'IfStatement') {
-      const cond = cexpr(st.test, scope);
-      lines.push(`  if (${cond.c}) {`);
-      genStmts(st.consequent, scope, lines);
-      if (st.alternate) { lines.push('  } else {'); genStmts(st.alternate, scope, lines); }
-      lines.push('  }');
-      return;
-    }
-    if (st.type === 'ReturnStatement') return; // void methods / effect cleanup
-    if (st.type === 'BreakStatement') { lines.push('  break;'); return; }
-    if (st.type === 'ContinueStatement') { lines.push('  continue;'); return; }
-    if (st.type === 'SwitchStatement') {
-      const d = cexpr(st.discriminant, scope);
-      if (d.t === 'string') err('switch on a string is not supported (use if/else)', st);
-      lines.push(`  switch (${d.c}) {`);
-      for (const cs of st.cases) {
-        lines.push(cs.test ? `  case ${cexpr(cs.test, scope).c}:` : '  default:');
-        for (const s2 of cs.consequent) genStmt(s2, scope, lines);
-      }
-      lines.push('  }');
-      return;
-    }
-    if (st.type === 'ForStatement' || st.type === 'WhileStatement') {
-      if (st.type === 'WhileStatement') lines.push(`  while (${cexpr(st.test, scope).c}) {`);
-      else {
-        const sc = { ...scope };
-        let initS = '';
-        if (st.init && st.init.type === 'VariableDeclaration') { const d = st.init.declarations[0]; sc[d.id.name] = { c: d.id.name, t: 'int' }; initS = `long long ${d.id.name} = ${cexpr(d.init, sc).c}`; }
-        const test = st.test ? cexpr(st.test, sc).c : '1';
-        const upd = st.update ? `${st.update.argument ? cexpr(st.update.argument, sc).c : ''}${st.update.operator || ''}` : '';
-        lines.push(`  for (${initS}; ${test}; ${st.update && st.update.type === 'UpdateExpression' ? cexpr(st.update.argument, sc).c + st.update.operator : (st.update ? cexpr(st.update, sc).c : '')}) {`);
-        scope = sc;
-      }
-      genStmts(st.body, scope, lines);
-      lines.push('  }');
-      return;
-    }
-    if (st.type === 'ExpressionStatement') {
-      const e = st.expression;
-      // assignment: local = v / local += v / ref.current = v
-      if (e.type === 'AssignmentExpression') {
-        const v = cexpr(e.right, scope);
-        if (e.left.type === 'MemberExpression' && e.left.property.name === 'current' && refByName(e.left.object.name)) {
-          lines.push(`  s->${e.left.object.name}__current ${e.operator} ${v.c};`); return;
-        }
-        if (e.left.type === 'Identifier' && scope[e.left.name]) { lines.push(`  ${e.left.name} ${e.operator} ${v.c};`); return; }
-        err('unsupported assignment target', e);
-      }
-      if (e.type === 'UpdateExpression' && e.argument.type === 'Identifier' && scope[e.argument.name]) { lines.push(`  ${e.argument.name}${e.operator};`); return; }
-      // ignore e.preventDefault() / e.stopPropagation()
-      if (e.type === 'CallExpression' && e.callee.type === 'MemberExpression' &&
-          (e.callee.property.name === 'preventDefault' || e.callee.property.name === 'stopPropagation')) return;
-      // setX(expr)
-      if (e.type === 'CallExpression' && e.callee.type === 'Identifier' && cellBySetter(e.callee.name)) {
-        const cell = cellBySetter(e.callee.name);
-        if (cell.t === 'array') { genArraySet(cell, e.arguments[0], scope, lines); lines.push(`  swiss_update_${cell.name}(s);`); return; }
-        if (cell.t === 'object') {
-          const o = e.arguments[0];
-          if (o.type !== 'ObjectExpression') err('setObject expects an object literal', o);
-          for (const p of o.properties) {
-            if (p.type === 'SpreadElement') continue; // {...obj} keeps the rest
-            const fn = p.key.name || p.key.value;
-            const f = cell.fields.find((x) => x.name === fn);
-            const v = cexpr(p.value, scope);
-            lines.push(`  s->${cell.name}.${fn} = ${f && f.t === 'string' ? `g_strdup(${v.c})` : v.c};`);
-          }
-          lines.push(`  swiss_update_${cell.name}(s);`); return;
-        }
-        const arg = e.arguments[0];
-        // functional updater: setX(prev => expr)
-        if (arg.type === 'ArrowFunctionExpression') {
-          const sc = { ...scope }; if (arg.params[0]) sc[arg.params[0].name] = { c: `s->${cell.name}`, t: cell.t };
-          const ve = arg.body.type === 'BlockStatement' ? (arg.body.body.find((s) => s.type === 'ReturnStatement') || {}).argument : arg.body;
-          lines.push(`  s->${cell.name} = ${cexpr(ve, sc).c};`); lines.push(`  swiss_update_${cell.name}(s);`); return;
-        }
-        const v = cexpr(arg, scope);
-        lines.push(`  s->${cell.name} = ${v.c};`);
-        lines.push(`  swiss_update_${cell.name}(s);`);
-        return;
-      }
-      // call to a component helper method
-      if (e.type === 'CallExpression' && e.callee.type === 'Identifier' && methodByName(e.callee.name)) {
-        const args = e.arguments.map((a) => cexpr(a, scope).c);
-        lines.push(`  method_${e.callee.name}(s${args.length ? ', ' + args.join(', ') : ''});`);
-        return;
-      }
-      // bare expression (ezy.call / swiss.*)
-      const v = cexpr(e, scope);
-      lines.push(`  ${v.c};`);
-      return;
-    }
-    err(`unsupported statement '${st.type}'`, st);
-  }
-
-  // build a struct literal for an array element from a JSX object literal
-  function objLit(cell, obj, scope) {
-    const inits = cell.fields.map((f) => {
-      const p = obj.properties.find((pr) => (pr.key.name || pr.key.value) === f.name);
-      if (!p) return `.${f.name} = ${f.t === 'string' ? '""' : '0'}`;
-      const v = cexpr(p.value, scope);
-      return `.${f.name} = ${f.t === 'string' ? `g_strdup(${v.c})` : v.c}`;
-    });
-    return `(${cell.struct}){ ${inits.join(', ')} }`;
-  }
-  // setX(...) where X is an array cell: support [...x, obj] / [objs] / [] / x.filter(pred)
-  function genArraySet(cell, arg, scope, lines) {
-    arg = stripParens(arg);
-    if (arg.type === 'ArrayExpression') {
-      const hasSpread = arg.elements.some((e) => e && e.type === 'SpreadElement');
-      if (!hasSpread) lines.push(`  s->${cell.name}.len = 0;`); // replace whole array
-      for (const el of arg.elements) {
-        if (!el || el.type === 'SpreadElement') continue; // spread = keep existing
-        if (el.type === 'ObjectExpression') lines.push(`  arrpush_${cell.name}(&s->${cell.name}, ${objLit(cell, el, scope)});`);
-        else err('array elements must be object literals', el);
-      }
-      return;
-    }
-    if (arg.type === 'CallExpression' && arg.callee.type === 'MemberExpression' && arg.callee.property.name === 'filter') {
-      const fp = arg.arguments[0].params;
-      const rs = { ...scope };
-      if (fp[0] && fp[0].name !== '_') rs[fp[0].name] = { rec: `s->${cell.name}.data[_i]`, shape: cell.fields };
-      if (fp[1]) rs[fp[1].name] = { c: '_i', t: 'int' };   // (item, index) => …
-      const pred = cexpr(stripParens(arg.arguments[0].body), rs).c;
-      lines.push(`  { long long _w = 0; for (long long _i = 0; _i < s->${cell.name}.len; _i++) { if (${pred}) s->${cell.name}.data[_w++] = s->${cell.name}.data[_i]; } s->${cell.name}.len = _w; }`);
-      return;
-    }
-    err('unsupported array setState (use [...x, {..}], [{..}], [], or x.filter(...))', arg);
-  }
-
-  // ── component helper methods → C functions ──
-  function emitMethods() {
-    for (const m of methods) {
-      const params = m.node.params.map((p) => p.name);
-      const scope = {};
-      params.forEach((p) => (scope[p] = { c: p, t: 'int' })); // index/id/bool params
-      const lines = [];
-      genStmts(m.node.body, scope, lines);
-      const sig = params.map((p) => `long long ${p}`).join(', ');
-      out.fns.push(`static void method_${m.name}(SwissState* s${sig ? ', ' + sig : ''}) {\n${lines.join('\n')}\n}`);
-    }
-  }
 
   // ── handler arrow → a C callback name; supports onPress (clicked) etc ──
   let hN = 0;
@@ -554,26 +39,10 @@ function emit(ast, opts) {
     combo: 'gtk_combo_box_get_active(GTK_COMBO_BOX(w))',
   };
   function emitHandler(attrNode, scope, kind) {
-    const fn = attrNode.expression;
     const id = `cb_${hN++}`;
-    const lines = [];
     // value name the handler sees: switch via param, others via _v
     const valName = kind === 'switch' ? '_sw_on' : VAL[kind] ? '_v' : null;
-    if (fn.type === 'Identifier' && cellBySetter(fn.name)) {
-      // onChange={setX}: write the event value straight into the cell
-      const cell = cellBySetter(fn.name);
-      lines.push(`  s->${cell.name} = ${valName || '0'}; swiss_update_${cell.name}(s);`);
-    } else if (fn.type === 'Identifier' && methodByName(fn.name)) {
-      const arity = methodByName(fn.name).node.params.length;
-      const arg = valName || (arity > 0 ? '0' : '');   // pass dummy for an (e) event param
-      lines.push(`  method_${fn.name}(s${arg ? ', ' + arg : ''});`);
-    } else if (fn.type === 'ArrowFunctionExpression') {
-      const hscope = { ...scope };
-      if (valName && fn.params[0]) { lines.push(`  long long ${fn.params[0].name} = ${valName};`); hscope[fn.params[0].name] = { c: fn.params[0].name, t: 'int' }; }
-      genStmts(fn.body, hscope, lines);   // bind the event-value param so the body can read it
-    } else {
-      err('handler must be an arrow function or a helper name', fn);
-    }
+    const lines = handlerBody(attrNode.expression, scope, valName);   // shared handler body
     // a row-button callback recovers its list index from widget data (first line)
     if (scope.__index) lines.unshift(`  long long ${scope.__indexName} = (long long)(intptr_t)g_object_get_data(G_OBJECT(w), "swiss_i");`);
     if (kind === 'switch') {
@@ -1033,15 +502,7 @@ function emit(ast, opts) {
     err(`unsupported component <${name}>`, el);
   }
 
-  // children loop: real elements + conditional expression children
-  // all state cells an expression depends on (follows derived consts)
-  const cellsIn = (node) => {
-    const s = new Set();
-    const visit = (n) => walk(n, (x) => { if (x.type === 'Identifier') { if (cellByName(x.name)) s.add(x.name); else if (derived[x.name]) visit(derived[x.name]); } });
-    visit(node);
-    return s;
-  };
-  const jsxOf = (n) => { n = stripParens(n); return n && (n.type === 'JSXElement' || n.type === 'JSXFragment') ? n : null; };
+  // children loop (cellsIn / jsxOf come from the core)
   function buildChildren(children, parentVar, scope) {
     for (const ch of children) {
       if (ch.type === 'JSXElement' || ch.type === 'JSXFragment') { build(ch, parentVar, scope); continue; }
@@ -1184,17 +645,9 @@ function emit(ast, opts) {
       );
     }
   }
-  const idxC = (n) => n; // row index is a plain C local in the row builder
-  const stripParens = (n) => (n.type === 'ParenthesizedExpression' ? n.expression : n);
-
-  // per-row button callbacks need the index: rewrite handlers that read the row
-  // index to fetch it from widget data. (Handled generically: in a row scope the
-  // index identifier maps to a C local read from g_object data inside the cb.)
-
-  // ── go ──
+  // ── go ── (stripParens / cellsIn / rootJSX come from the core)
   emitMethods();
-  const rootJSX = (() => { let j = null; for (const s of comp.body.body) if (s.type === 'ReturnStatement') j = stripParens(s.argument); if (!j) err('component must return JSX'); return j; })();
-  const rootVar = build(rootJSX, null, {});
+  const rootVar = build(rootJSX(), null, {});
   emitLists();
 
   // useEffect(fn, deps) → fn at startup; if deps non-empty, also re-run on change
@@ -1245,6 +698,7 @@ function emit(ast, opts) {
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <math.h>
 
 ${externDecls || '// (no ezy backend calls)'}
@@ -1264,8 +718,24 @@ ${stateFields.join('\n')}
 
 static SwissState S;
 
+// ── swiss_* helper API (the shared core emits these; here over GLib) ──
+static char* swiss_aprintf(const char* fmt, ...) { va_list ap; va_start(ap, fmt); char* r = g_strdup_vprintf(fmt, ap); va_end(ap); return r; }
+static char* swiss_strdup(const char* s) { return g_strdup(s); }
+static char* swiss_upper(const char* s) { return g_ascii_strup(s, -1); }
+static char* swiss_lower(const char* s) { return g_ascii_strdown(s, -1); }
+static char* swiss_trim(const char* s) { return g_strstrip(g_strdup(s)); }
+static int swiss_startswith(const char* s, const char* p) { return g_str_has_prefix(s, p); }
+static int swiss_endswith(const char* s, const char* p) { return g_str_has_suffix(s, p); }
 static char* swiss_concat(const char* a, const char* b) { return g_strconcat(a, b, NULL); }
 static long long swiss_indexof(const char* s, const char* sub) { const char* p = strstr(s, sub); return p ? (long long)(p - s) : -1; }
+// timers: a void(SwissState*) callback driven by g_timeout
+static struct { guint id; void (*cb)(SwissState*); int repeat; } g_timers[32]; static int g_ntimers;
+static gboolean swiss_timer_tramp(gpointer ud) { int i = (int)(intptr_t)ud; g_timers[i].cb(&S); return g_timers[i].repeat ? G_SOURCE_CONTINUE : G_SOURCE_REMOVE; }
+static long long swiss_timer_add(long long ms, void (*cb)(SwissState*), int repeat) {
+  int i = g_ntimers < 32 ? g_ntimers++ : 0; g_timers[i].cb = cb; g_timers[i].repeat = repeat;
+  g_timers[i].id = g_timeout_add((guint)ms, swiss_timer_tramp, (gpointer)(intptr_t)i); return (long long)g_timers[i].id;
+}
+static void swiss_timer_clear(long long id) { g_source_remove((guint)id); }
 static char* swiss_substr(const char* s, long long a, long long b) {
   long long n = (long long)strlen(s); if (a < 0) a = 0; if (b < 0 || b > n) b = n; if (b < a) b = a;
   return g_strndup(s + a, (gsize)(b - a));
