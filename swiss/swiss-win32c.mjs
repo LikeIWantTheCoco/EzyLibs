@@ -299,14 +299,12 @@ function emit(ast, opts) {
       if (!press && isSubmit) press = scope.__form;
       const id = press ? command(emitHandler(press, scope, 'click'), 'BN_CLICKED') : 0;
       const hw = vid('w');
-      // a styled button (backgroundColor/color) is owner-drawn so it can honor
-      // those colors (native Win32 buttons ignore them); plain buttons stay
-      // native (themed v6). A submit button is the form default (Enter triggers).
+      // every button is owner-drawn (GDI+ AA rounded) for a consistent flat,
+      // modern look — colored from backgroundColor/color, or a light surface +
+      // border when plain. (No BS_DEFPUSHBUTTON: owner-draw can't be the default.)
       const bgCol = colorref(st && st.backgroundColor), fgCol = colorref(st && st.color);
-      const owner = bgCol || fgCol;
-      const bstyle = owner ? 'BS_OWNERDRAW' : isSubmit ? 'BS_DEFPUSHBUTTON' : 'BS_PUSHBUTTON';
-      out.build.push(`  HWND ${hw} = CreateWindowExA(0, "BUTTON", ${cstr(label)}, WS_CHILD | WS_VISIBLE | ${bstyle} | WS_TABSTOP, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
-      if (owner) out.build.push(`  swiss_btn_style(${hw}, ${bgCol || '0'}, ${bgCol ? 1 : 0}, ${fgCol || '0'}, ${fgCol ? 1 : 0}, SC(${na.radius}), ${(scope && scope.__bg) || 'g_bgcol'});`);
+      out.build.push(`  HWND ${hw} = CreateWindowExA(0, "BUTTON", ${cstr(label)}, WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
+      out.build.push(`  swiss_btn_style(${hw}, ${bgCol || '0'}, ${bgCol ? 1 : 0}, ${fgCol || '0'}, ${fgCol ? 1 : 0}, SC(${na.radius || 6}), ${(scope && scope.__bg) || 'g_bgcol'});`);
       if (scope.__index) out.build.push(`  SetWindowLongPtrA(${hw}, GWLP_USERDATA, (LONG_PTR)${scope.__index.c});`);
       if (dynTitle) {
         const tv = cexpr(dynTitle, scope);
@@ -392,7 +390,7 @@ function emit(ast, opts) {
       const f = vid('cmb'); stateFields.push(`  HWND ${f};`);
       const cell = a.value && a.value.type === 'JSXExpressionContainer' ? cellByName(a.value.expression.name) : null;
       const id = a.onChange ? command(emitHandler(a.onChange, scope, 'combo'), 'CBN_SELCHANGE') : 0;
-      out.build.push(`  s->${f} = CreateWindowExA(0, "COMBOBOX", NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
+      out.build.push(`  s->${f} = CreateWindowExA(0, "COMBOBOX", NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
       const opts = a.options && a.options.expression && a.options.expression.type === 'ArrayExpression' ? a.options.expression.elements : [];
       for (const o of opts) out.build.push(`  SendMessageA(s->${f}, CB_ADDSTRING, 0, (LPARAM)${cstr(o.value)});`);
       if (cell) {
@@ -406,7 +404,7 @@ function emit(ast, opts) {
       const cell = a.value && a.value.type === 'JSXExpressionContainer' ? cellByName(a.value.expression.name) : null;
       const min = Number(strAttr(a.min) || (a.min && a.min.expression && a.min.expression.value) || 0);
       const max = Number(strAttr(a.max) || (a.max && a.max.expression && a.max.expression.value) || 100);
-      out.build.push(`  s->${f} = CreateWindowExA(0, TRACKBAR_CLASS, NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ, 0, 0, 0, 0, g_main, NULL, g_hinst, NULL);`);
+      out.build.push(`  s->${f} = CreateWindowExA(0, TRACKBAR_CLASS, NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS, 0, 0, 0, 0, g_main, NULL, g_hinst, NULL);`);
       out.build.push(`  SendMessageA(s->${f}, TBM_SETRANGE, TRUE, MAKELONG(${min}, ${max}));`);
       if (cell) {
         out.build.push(`  SendMessageA(s->${f}, TBM_SETPOS, TRUE, s->${cell.name});`);
@@ -419,7 +417,9 @@ function emit(ast, opts) {
       const f = vid('pb'); stateFields.push(`  HWND ${f};`);
       const cell = a.value && a.value.type === 'JSXExpressionContainer' ? cellByName(a.value.expression.name) : null;
       const max = Number(strAttr(a.max) || (a.max && a.max.expression && a.max.expression.value) || 100);
-      out.build.push(`  s->${f} = CreateWindowExA(0, PROGRESS_CLASS, NULL, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, g_main, NULL, g_hinst, NULL);`);
+      out.build.push(`  s->${f} = CreateWindowExA(0, PROGRESS_CLASS, NULL, WS_CHILD | WS_VISIBLE | PBS_SMOOTH, 0, 0, 0, 0, g_main, NULL, g_hinst, NULL);`);
+      // flat accent fill: drop the v6 theme so the custom bar/bg colors apply
+      out.build.push(`  SetWindowTheme(s->${f}, L"", L""); SendMessageA(s->${f}, PBM_SETBARCOLOR, 0, RGB(0, 102, 204)); SendMessageA(s->${f}, PBM_SETBKCOLOR, 0, RGB(225, 228, 232));`);
       out.build.push(`  SendMessageA(s->${f}, PBM_SETRANGE, 0, MAKELPARAM(0, ${max}));`);
       if (cell) {
         const setf = `SendMessageA(s->${f}, PBM_SETPOS, (WPARAM)s->${cell.name}, 0);`;
@@ -644,6 +644,7 @@ function emit(ast, opts) {
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commctrl.h>
+#include <uxtheme.h>
 #include <shlobj.h>
 #include <commdlg.h>
 #include <stdio.h>
@@ -930,14 +931,17 @@ static void swiss_btn_style(HWND w, COLORREF bg, int hasbg, COLORREF fg, int has
 static COLORREF swiss_darken(COLORREF c, int pct) { return RGB(GetRValue(c)*pct/100, GetGValue(c)*pct/100, GetBValue(c)*pct/100); }
 static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
   for (int i = 0; i < g_nbtns; i++) if (g_btns[i].w == d->hwndItem) {
-    COLORREF bg = g_btns[i].hasbg ? g_btns[i].bg : GetSysColor(COLOR_BTNFACE);
-    if (d->itemState & ODS_SELECTED) bg = swiss_darken(bg, 85);          // pressed
-    else if (d->itemState & ODS_HOTLIGHT) bg = swiss_darken(bg, 92);     // hover
+    int plain = !g_btns[i].hasbg;
+    COLORREF bg = plain ? RGB(245, 246, 248) : g_btns[i].bg;   // light surface for plain buttons
+    if (d->itemState & ODS_SELECTED) bg = swiss_darken(bg, plain ? 94 : 85);   // pressed
+    else if (d->itemState & ODS_HOTLIGHT) bg = swiss_darken(bg, plain ? 97 : 92); // hover
     // paint the panel color behind first (no window region — GDI+ AA rounds it)
     HBRUSH bb = CreateSolidBrush(g_btns[i].behind); FillRect(d->hDC, &d->rcItem, bb); DeleteObject(bb);
     int r = g_btns[i].radius;
     int focus = (d->itemState & ODS_FOCUS) ? 1 : 0;
-    swiss_fill_round(d->hDC, d->rcItem, r, C2A(bg), C2A(RGB(0, 102, 204)), focus ? 2.0f : 0.0f);
+    // plain buttons get a 1px border; focused buttons get an accent ring
+    ARGB border = focus ? C2A(RGB(0, 102, 204)) : plain ? C2A(RGB(205, 208, 212)) : 0;
+    swiss_fill_round(d->hDC, d->rcItem, r, C2A(bg), border, (focus || plain) ? (focus ? 2.0f : 1.0f) : 0.0f);
     SetBkMode(d->hDC, TRANSPARENT);
     SetTextColor(d->hDC, g_btns[i].hasfg ? g_btns[i].fg : GetSysColor(COLOR_BTNTEXT));
     HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0);
@@ -957,6 +961,21 @@ static void swiss_check_style(HWND w, COLORREF behind, COLORREF fg) { if (g_nche
 static int swiss_check_idx(HWND w) { for (int i = 0; i < g_nchecks; i++) if (g_checks[i].w == w) return i; return -1; }
 static void swiss_check_set(HWND w, int v) { int i = swiss_check_idx(w); if (i >= 0) { g_checks[i].checked = v ? 1 : 0; InvalidateRect(w, NULL, FALSE); } }
 static long long swiss_check_get(HWND w) { int i = swiss_check_idx(w); return i >= 0 ? g_checks[i].checked : 0; }
+// flat owner-drawn combo item / closed display (accent selection)
+static int swiss_combo_draw(LPDRAWITEMSTRUCT d) {
+  if (d->CtlType != ODT_COMBOBOX) return 0;
+  RECT rc = d->rcItem; int sel = (d->itemState & ODS_SELECTED) ? 1 : 0;
+  HBRUSH b = CreateSolidBrush(sel ? RGB(0, 102, 204) : g_bgcol); FillRect(d->hDC, &rc, b); DeleteObject(b);
+  if (d->itemID != (UINT)-1) {
+    char txt[256]; txt[0] = 0; SendMessageA(d->hwndItem, CB_GETLBTEXT, d->itemID, (LPARAM)txt);
+    SetBkMode(d->hDC, TRANSPARENT); SetTextColor(d->hDC, sel ? RGB(255, 255, 255) : g_fgcol);
+    HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0); HGDIOBJ of = f ? SelectObject(d->hDC, f) : NULL;
+    RECT tr = rc; tr.left += SC(8);
+    DrawTextA(d->hDC, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    if (of) SelectObject(d->hDC, of);
+  }
+  return 1;
+}
 static int swiss_check_draw(LPDRAWITEMSTRUCT d) {
   int i = swiss_check_idx(d->hwndItem); if (i < 0) return 0;
   RECT rc = d->rcItem;
@@ -1097,6 +1116,12 @@ ${cmdCases || '      break;'}
     case WM_DRAWITEM: {
       if (swiss_btn_draw((LPDRAWITEMSTRUCT)lp)) return TRUE;
       if (swiss_check_draw((LPDRAWITEMSTRUCT)lp)) return TRUE;
+      if (swiss_combo_draw((LPDRAWITEMSTRUCT)lp)) return TRUE;
+      break;
+    }
+    case WM_MEASUREITEM: {
+      LPMEASUREITEMSTRUCT m = (LPMEASUREITEMSTRUCT)lp;
+      if (m->CtlType == ODT_COMBOBOX) { m->itemHeight = SC(24); return TRUE; }
       break;
     }
     case WM_SETCURSOR: {   // hand cursor over styled buttons (web cursor:pointer)
