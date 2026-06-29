@@ -14,7 +14,12 @@ import { ezy, setBackend, connectEzy } from './swiss-bridge.js';
 
 const renderer = makeRenderer(webHost);
 
+// shared default font across all targets (matches the win32 / gtk default);
+// the browser default is serif, so set a sans-serif stack on the root.
+const SWISS_FONT = "'Segoe UI', system-ui, -apple-system, Roboto, 'Helvetica Neue', Arial, sans-serif";
+
 export function render(element, container, opts) {
+  if (container) { container.style.fontFamily = SWISS_FONT; container.style.fontSize = '15px'; }
   if (opts && opts.backend) {
     connectEzy(opts.backend, opts.sigs || {}).then((impl) => {
       setBackend(impl);

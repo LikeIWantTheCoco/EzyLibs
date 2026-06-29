@@ -596,17 +596,30 @@ function emit(ast, opts) {
     }
     return o;
   }
-  // resolve a style= attr: styles.x ref, [styles.a, styles.b] array, or inline {{…}}
+  // one style source → object: inline {{…}}, styles.x ref, or [styles.a, styles.b]
+  function resolveOne(e) {
+    if (!e) return {};
+    if (e.type === 'ObjectExpression') return parseInline(e);
+    if (e.type === 'MemberExpression' && e.object.name === 'styles') return styles[e.property.name] || {};
+    if (e.type === 'ArrayExpression') {
+      const names = [];
+      for (const el of e.elements) if (el && el.type === 'MemberExpression' && el.object.name === 'styles') names.push(el.property.name);
+      return Object.assign({}, ...names.map((n) => styles[n] || {}));
+    }
+    return {};
+  }
+  // resolve a style= attr. A ternary `cond ? styles.a : styles.b` takes layout
+  // from the consequent and records the condition so dynamic props (color) can
+  // be chosen at runtime.
   function resolveStyle(node) {
     if (!node || node.type !== 'JSXExpressionContainer') return null;
     const e = node.expression;
-    if (e.type === 'ObjectExpression') return parseInline(e);
-    const names = [];
-    if (e.type === 'MemberExpression' && e.object.name === 'styles') names.push(e.property.name);
-    else if (e.type === 'ArrayExpression')
-      for (const el of e.elements) if (el && el.type === 'MemberExpression' && el.object.name === 'styles') names.push(el.property.name);
-    if (!names.length) return null;
-    return Object.assign({}, ...names.map((n) => styles[n] || {}));
+    if (e.type === 'ConditionalExpression') {
+      const a = resolveOne(e.consequent), b = resolveOne(e.alternate);
+      const merged = { ...a }; merged.__cond = { test: e.test, a, b }; return merged;
+    }
+    const o = resolveOne(e);
+    return Object.keys(o).length ? o : null;
   }
 
   function attrs(el) { const o = {}; for (const a of el.openingElement.attributes) if (a.type === 'JSXAttribute') o[a.name.name] = a.value; return o; }
@@ -650,14 +663,24 @@ function emit(ast, opts) {
     return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross, radius };
   }
   // apply font + text color to a freshly created control hwnd expr
-  function applyControl(hw, st, kind, inheritBg) {
-    const f = fontFor(st) || (kind === 'text' && st && st.fontWeight === 'bold' ? 'swiss_font(0, 1)' : null);
-    if (f) out.build.push(`  SendMessageA(${hw}, WM_SETFONT, (WPARAM)${f}, TRUE);`);
-    const col = st && colorref(st.color);
+  function applyControl(hw, st, kind, scope) {
+    // every control gets the common Segoe UI font (default size/weight unless
+    // styled) so all controls match the web/gtk default font, not the dated
+    // system GUI font.
+    const sz = st && st.fontSize ? Number(st.fontSize) : 0;
+    const bold = st && (st.fontWeight === 'bold' || Number(st.fontWeight) >= 600) ? 1 : 0;
+    out.build.push(`  SendMessageA(${hw}, WM_SETFONT, (WPARAM)swiss_font(${sz}, ${bold}), TRUE);`);
+    // text color — static, or chosen at runtime for a `cond ? a : b` style
+    let col = st && colorref(st.color);
+    const cnd = st && st.__cond;
+    if (cnd && (cnd.a.color || cnd.b.color)) {
+      const ca = colorref(cnd.a.color) || 'RGB(0,0,0)', cb = colorref(cnd.b.color) || 'RGB(0,0,0)';
+      col = `(${cexpr(cnd.test, scope || {}).c} ? ${ca} : ${cb})`;
+    }
     if (col) out.build.push(`  swiss_set_color(${hw}, ${col});`);
     // a Text paints opaque on its own backgroundColor, else the inherited panel
     // bg (so text on a colored View shows correctly without transparency)
-    const bg = kind === 'text' ? ((st && colorref(st.backgroundColor)) || inheritBg) : null;
+    const bg = kind === 'text' ? ((st && colorref(st.backgroundColor)) || (scope && scope.__bg)) : null;
     if (bg) out.build.push(`  swiss_set_bg(${hw}, ${bg});`);
   }
 
@@ -752,7 +775,7 @@ function emit(ast, opts) {
         if (scope.__inrow) {
           const hw = ctl('"STATIC"', ssAlign, 'NULL', 'text');
           out.build.push(`  ${textSnippet(el, scope, hw).snippet}`);
-          applyControl(hw, st, 'text', scope.__bg); const n = vid('n');
+          applyControl(hw, st, 'text', scope); const n = vid('n');
           out.build.push(`  Node* ${n} = ${mkNode(hw)};`); selfStep(n); pack(n); return n;
         }
         const f = vid('lbl'); stateFields.push(`  HWND ${f};`);
@@ -760,11 +783,11 @@ function emit(ast, opts) {
         const real = textSnippet(el, scope, `s->${f}`);
         out.build.push(`  ${real.snippet}`);
         info.reads.forEach((cn) => deps[cn].push(real.snippet));
-        applyControl(`s->${f}`, st, 'text', scope.__bg);
+        applyControl(`s->${f}`, st, 'text', scope);
         const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(`s->${f}`)};`); selfStep(n); pack(n); return n;
       }
       const hw = ctl('"STATIC"', ssAlign, cstr(info.staticText), 'text');
-      applyControl(hw, st, 'text', scope.__bg);
+      applyControl(hw, st, 'text', scope);
       const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(hw)};`); selfStep(n); pack(n); return n;
     }
     if (name === 'Button') {
@@ -798,7 +821,7 @@ function emit(ast, opts) {
         const snip = `EnableWindow(${bw}, !(${cexpr(a.disabled.expression, scope).c}));`;
         out.build.push(`  ${snip}`); if (!scope.__inrow) cellsIn(a.disabled.expression).forEach((cn) => deps[cn].push(snip));
       }
-      applyControl(hw, st, 'btn');
+      applyControl(hw, st, 'btn', scope);
       const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(${hw}, ${na.w}, ${leafH(-1)}, ${na.flex});`); selfStep(n); pack(n); return n;
     }
     if (name === 'Input') {
@@ -825,7 +848,7 @@ function emit(ast, opts) {
         out.build.push(`  SetWindowTextA(s->${f}, ${cell.t === 'string' ? `s->${cell.name}` : '""'});`);
         deps[cell.name].push(`{ char* _t = swiss_gettext(s->${f}); if (strcmp(_t, s->${cell.name}) != 0) SetWindowTextA(s->${f}, s->${cell.name}); free(_t); }`);
       }
-      applyControl(`s->${f}`, st, 'edit');
+      applyControl(`s->${f}`, st, 'edit', scope);
       const nh = leafH(24);   // width auto (-1) → fills a stretch parent; height from padding+font
       const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w}, ${nh}, ${na.flex});`); selfStep(n); pack(n); return n;
     }
@@ -844,7 +867,7 @@ function emit(ast, opts) {
         out.build.push(`  SetWindowTextA(s->${f}, s->${cell.name});`);
         deps[cell.name].push(`{ char* _t = swiss_gettext(s->${f}); if (strcmp(_t, s->${cell.name}) != 0) SetWindowTextA(s->${f}, s->${cell.name}); free(_t); }`);
       }
-      applyControl(`s->${f}`, st, 'edit');
+      applyControl(`s->${f}`, st, 'edit', scope);
       const nh = na.h < 0 ? 80 : na.h;
       const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w}, ${nh}, ${na.flex || 1});`); selfStep(n); pack(n); return n;
     }
@@ -857,7 +880,7 @@ function emit(ast, opts) {
         out.build.push(`  SendMessageA(s->${f}, BM_SETCHECK, s->${cell.name} ? BST_CHECKED : BST_UNCHECKED, 0);`);
         deps[cell.name].push(`SendMessageA(s->${f}, BM_SETCHECK, s->${cell.name} ? BST_CHECKED : BST_UNCHECKED, 0);`);
       }
-      applyControl(`s->${f}`, st, 'text', scope.__bg);
+      applyControl(`s->${f}`, st, 'text', scope);
       const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w}, ${na.h < 0 ? 22 : na.h}, ${na.flex});`); selfStep(n); pack(n); return n;
     }
     if (name === 'Select') {
