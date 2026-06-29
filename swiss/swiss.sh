@@ -289,16 +289,19 @@ build_backend() {
   [ -d "$LIB" ] && copy_runtime src/swiss   # self-heal stale project runtime
   gen_permissions
   echo "swiss: compiling backend → wasm (ESM)"
-  # compile every .ez in backend/ to an ESM wasm module under src/
+  # compile every .ez in backend/ to an ESM wasm module under src/. Skip the
+  # swiss-native facade: it pulls the native os/* .so libs (which aren't wasm),
+  # and on web native access comes from JS (`import { native } from 'swiss'`).
   for ez in backend/*.ez; do
     [ -e "$ez" ] || continue
     base=$(basename "$ez" .ez)
+    [ "$base" = "swiss-native" ] && continue
     out="src/$base"
     [ "$base" = "main" ] && out="src/backend"
     ezy compile --release --platform web-esm "$ez" -o "$out"
   done
-  # signatures for the web bridge (typed ccall)
-  node src/swiss/swiss-sig.mjs backend/*.ez --out src/backend.sig.json
+  # signatures for the web bridge (typed ccall) — also skip the native facade
+  node src/swiss/swiss-sig.mjs $(ls backend/*.ez | grep -v 'swiss-native\.ez') --out src/backend.sig.json
 }
 
 # detect the host OS → the default desktop target
