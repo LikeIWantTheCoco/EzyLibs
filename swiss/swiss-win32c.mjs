@@ -713,6 +713,20 @@ static void swiss_fill_round(HDC hdc, RECT rc, int r, ARGB fill, ARGB border, fl
   if (bw > 0) { GpPen* pen = NULL; GdipCreatePen1(border, bw, 2 /* UnitPixel */, &pen); if (pen) { GdipDrawPath(g, pen, p); GdipDeletePen(pen); } }
   GdipDeletePath(p); GdipDeleteGraphics(g);
 }
+// antialiased rounded fill with a vertical top→bottom gradient (button bevel)
+typedef struct { int X, Y, Width, Height; } GpRectI;
+GpStatus WINAPI GdipCreateLineBrushFromRectI(const GpRectI*, ARGB, ARGB, int, int, GpBrush**);
+static void swiss_fill_round_grad(HDC hdc, RECT rc, int r, ARGB top, ARGB bot, ARGB border, float bw) {
+  GpGraphics* g = NULL; if (GdipCreateFromHDC(hdc, &g) != 0 || !g) return;
+  GdipSetSmoothingMode(g, 4);
+  GpPath* p = NULL; GdipCreatePath(0, &p);
+  swiss_round_path(p, (float)rc.left + 0.5f, (float)rc.top + 0.5f, (float)(rc.right - rc.left) - 1, (float)(rc.bottom - rc.top) - 1, (float)r);
+  GpRectI gr = { rc.left, rc.top, rc.right - rc.left, (rc.bottom - rc.top) + 1 };
+  GpBrush* b = NULL; GdipCreateLineBrushFromRectI(&gr, top, bot, 1 /* vertical */, 0, &b);
+  if (b) { GdipFillPath(g, b, p); GdipDeleteBrush(b); }
+  if (bw > 0) { GpPen* pen = NULL; GdipCreatePen1(border, bw, 2, &pen); if (pen) { GdipDrawPath(g, pen, p); GdipDeletePen(pen); } }
+  GdipDeletePath(p); GdipDeleteGraphics(g);
+}
 
 // ── runtime layout node tree (stack/flex, recomputed on resize) ──
 typedef struct Node {
@@ -798,6 +812,14 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
     if (moved) {
       int in = n->frame ? SC(3) : 0;   // inset framed inputs so the drawn border ring shows
       MoveWindow(n->hwnd, x + in, y + in, w - 2 * in, h - 2 * in, TRUE);
+      if (n->frame) {   // vertically centre the single-line text/placeholder (like GTK)
+        RECT er; GetClientRect(n->hwnd, &er);
+        HDC dc = GetDC(n->hwnd); HFONT fo = (HFONT)SendMessageA(n->hwnd, WM_GETFONT, 0, 0);
+        HGDIOBJ oo = fo ? SelectObject(dc, fo) : NULL; TEXTMETRICA tm; GetTextMetricsA(dc, &tm);
+        if (oo) SelectObject(dc, oo); ReleaseDC(n->hwnd, dc);
+        int top = (er.bottom - tm.tmHeight) / 2; if (top < 0) top = 0;
+        er.top = top; SendMessageA(n->hwnd, EM_SETRECTNP, 0, (LPARAM)&er);
+      }
       // borderRadius → clip the control to a rounded rect. Owner-drawn buttons
       // and framed inputs skip this — corners come from the GDI+ drawing.
       if (n->radius > 0 && !n->frame && !swiss_is_btn(n->hwnd) && !swiss_is_pill(n->hwnd))
@@ -944,6 +966,8 @@ static void swiss_btn_style(HWND w, COLORREF bg, int hasbg, COLORREF fg, int has
     g_btns[g_nbtns].fg = fg; g_btns[g_nbtns].hasfg = hasfg; g_btns[g_nbtns].radius = radius; g_btns[g_nbtns].behind = behind; g_nbtns++; }
 }
 static COLORREF swiss_darken(COLORREF c, int pct) { return RGB(GetRValue(c)*pct/100, GetGValue(c)*pct/100, GetBValue(c)*pct/100); }
+static int _clamp255(int v) { return v > 255 ? 255 : v; }
+static COLORREF swiss_lighten(COLORREF c, int pct) { return RGB(_clamp255(GetRValue(c)*pct/100), _clamp255(GetGValue(c)*pct/100), _clamp255(GetBValue(c)*pct/100)); }
 static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
   for (int i = 0; i < g_nbtns; i++) if (g_btns[i].w == d->hwndItem) {
     int plain = !g_btns[i].hasbg;
@@ -957,7 +981,8 @@ static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
     // every button gets a 1px border for definition (GTK-like): a darker shade
     // of its own color when colored, a neutral gray when plain, accent when focused
     ARGB border = focus ? C2A(RGB(0, 102, 204)) : plain ? C2A(RGB(205, 208, 212)) : C2A(swiss_darken(bg, 82));
-    swiss_fill_round(d->hDC, d->rcItem, r, C2A(bg), border, focus ? 2.0f : 1.0f);
+    // GTK-like bevel: a subtle vertical gradient (lighter top → base/darker bottom)
+    swiss_fill_round_grad(d->hDC, d->rcItem, r, C2A(swiss_lighten(bg, 110)), C2A(swiss_darken(bg, 96)), border, focus ? 2.0f : 1.0f);
     SetBkColor(d->hDC, bg); SetBkMode(d->hDC, OPAQUE);   // opaque over the solid fill → subpixel ClearType text
     SetTextColor(d->hDC, g_btns[i].hasfg ? g_btns[i].fg : GetSysColor(COLOR_BTNTEXT));
     HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0);
