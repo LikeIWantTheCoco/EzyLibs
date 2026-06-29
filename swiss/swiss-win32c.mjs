@@ -44,26 +44,11 @@ function emit(ast, opts) {
     range: '(long long)SendMessageA(w, TBM_GETPOS, 0, 0)',
     combo: '(long long)SendMessageA(w, CB_GETCURSEL, 0, 0)',
   };
-  // build a callback body and register it under a fresh command id; returns {id}
+  // build a callback body (shared core) and register it under a fresh command id
   function emitHandler(attrNode, scope, kind) {
-    const fn = attrNode.expression;
     const id = `cb_${hN++}`;
-    const lines = [];
     const valName = VAL[kind] ? '_v' : null;
-    if (fn.type === 'Identifier' && cellBySetter(fn.name)) {
-      const cell = cellBySetter(fn.name);
-      lines.push(`  s->${cell.name} = ${valName || '0'}; swiss_update_${cell.name}(s);`);
-    } else if (fn.type === 'Identifier' && methodByName(fn.name)) {
-      const arity = methodByName(fn.name).node.params.length;
-      const arg = valName || (arity > 0 ? '0' : '');
-      lines.push(`  method_${fn.name}(s${arg ? ', ' + arg : ''});`);
-    } else if (fn.type === 'ArrowFunctionExpression') {
-      const hscope = { ...scope };
-      if (valName && fn.params[0]) { lines.push(`  long long ${fn.params[0].name} = ${valName};`); hscope[fn.params[0].name] = { c: fn.params[0].name, t: 'int' }; }
-      genStmts(fn.body, hscope, lines);   // bind the event-value param so the body can read it
-    } else {
-      err('handler must be an arrow function or a helper name', fn);
-    }
+    const lines = handlerBody(attrNode.expression, scope, valName);
     if (scope.__index) lines.unshift(`  long long ${scope.__indexName} = (long long)GetWindowLongPtrA(w, GWLP_USERDATA);`);
     const pre = VAL[kind] ? `  long long _v = ${VAL[kind]}; (void)_v;\n` : '';
     out.fns.push(`static void ${id}(SwissState* s, HWND w) {\n  (void)w;\n${pre}${lines.join('\n')}\n}`);
@@ -936,7 +921,12 @@ static void swiss_set_theme(long long dark) {
   g_fgcol = dark ? RGB(230, 230, 230) : RGB(26, 26, 26);
   if (g_white) DeleteObject(g_white);
   g_white = CreateSolidBrush(g_bgcol);
-  if (g_main) { SetClassLongPtrA(g_main, GCLP_HBRBACKGROUND, (LONG_PTR)g_white); InvalidateRect(g_main, NULL, TRUE); }
+  if (g_main) {
+    SetClassLongPtrA(g_main, GCLP_HBRBACKGROUND, (LONG_PTR)g_white);
+    // repaint the window AND every child so each control re-queries its colors
+    // (WS_CLIPCHILDREN means a plain InvalidateRect skips the children)
+    RedrawWindow(g_main, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+  }
 }
 
 ${cells.map((c) => `static void swiss_update_${c.name}(SwissState* s);`).join('\n')}

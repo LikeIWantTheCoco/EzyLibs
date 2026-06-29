@@ -498,13 +498,33 @@ export function createFrontend(ast, opts) {
     err('unsupported array setState (use [...x, {..}], [{..}], [], or x.filter(...))', arg);
   }
 
+  // React snapshot semantics: within one event handler / helper, a state read
+  // sees the render-time value even after setX — setX schedules, it doesn't
+  // mutate the binding. The C lowering writes s->cell immediately, so snapshot
+  // every scalar cell that's both written and read in this body into a local,
+  // and resolve reads to it (writes still target s->cell). Without this,
+  // `setDark(!dark); setTheme(!dark)` would read the just-changed value.
+  function snapDecls(node, baseScope) {
+    const written = new Set();
+    walk(node, (n) => { if (n.type === 'CallExpression' && n.callee.type === 'Identifier' && cellBySetter(n.callee.name)) written.add(cellBySetter(n.callee.name).name); });
+    const decls = []; const scope = { ...baseScope };
+    for (const name of written) {
+      const cell = cellByName(name);
+      if (!cell || cell.t === 'array' || cell.t === 'object') continue;   // structs mutate in place
+      decls.push(`  ${cType(cell.t === 'bool' ? 'int' : cell.t)} _snap_${name} = s->${name};`);
+      scope[name] = { c: `_snap_${name}`, t: cell.t };
+    }
+    return { decls, scope };
+  }
+
   // component helper methods → C functions: method_<name>(SwissState* s, …)
   function emitMethods() {
     for (const m of methods) {
       const params = m.node.params.map((p) => p.name);
-      const scope = {};
-      params.forEach((p) => (scope[p] = { c: p, t: 'int' }));
-      const lines = [];
+      const base = {};
+      params.forEach((p) => (base[p] = { c: p, t: 'int' }));
+      const { decls, scope } = snapDecls(m.node.body, base);
+      const lines = [...decls];
       genStmts(m.node.body, scope, lines);
       const sig = params.map((p) => `long long ${p}`).join(', ');
       out.fns.push(`static void method_${m.name}(SwissState* s${sig ? ', ' + sig : ''}) {\n${lines.join('\n')}\n}`);
@@ -524,8 +544,9 @@ export function createFrontend(ast, opts) {
       const arg = valName || (arity > 0 ? '0' : '');
       lines.push(`  method_${fn.name}(s${arg ? ', ' + arg : ''});`);
     } else if (fn.type === 'ArrowFunctionExpression') {
-      const hscope = { ...scope };
+      const { decls, scope: hscope } = snapDecls(fn.body, scope);   // React snapshot of written+read cells
       if (valName && fn.params[0]) { lines.push(`  long long ${fn.params[0].name} = ${valName};`); hscope[fn.params[0].name] = { c: fn.params[0].name, t: 'int' }; }
+      lines.push(...decls);
       genStmts(fn.body, hscope, lines);
     } else {
       err('handler must be an arrow function or a helper name', fn);
