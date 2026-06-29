@@ -363,7 +363,8 @@ build_win32() {
   "$CC" -D_GNU_SOURCE -c "$work/backend.c" -o "$work/backend.o"
   "$CC" -c src/swiss/swiss-winshim.c -o "$work/winshim.o"   # POSIX bits mingw lacks
 
-  # app manifest → comctl32 v6 (themed controls + EM_SETCUEBANNER placeholders)
+  # app manifest → comctl32 v6 (themed controls + cue banners) + per-monitor DPI
+  # awareness (without it Windows bitmap-scales the window on HiDPI → blurry)
   cat > "$work/app.manifest" <<'XML'
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
@@ -371,6 +372,12 @@ build_win32() {
     type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0"
     processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
   </dependentAssembly></dependency>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
+    </windowsSettings>
+  </application>
 </assembly>
 XML
   printf '1 24 "app.manifest"\n' > "$work/app.rc"

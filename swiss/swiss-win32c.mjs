@@ -230,8 +230,8 @@ function emit(ast, opts) {
     const selfStep = (nv) => {
       if (na.selfalign) out.build.push(`  ${nv}->selfalign = ${na.selfalign};`);
       if (na.fillcross) out.build.push(`  ${nv}->fillcross = 1;`);
-      if (na.radius) out.build.push(`  ${nv}->radius = ${na.radius};`);
-      if (na.mt || na.mb || na.ml || na.mr) out.build.push(`  ${nv}->mt = ${na.mt}; ${nv}->mb = ${na.mb}; ${nv}->ml = ${na.ml}; ${nv}->mr = ${na.mr};`);
+      if (na.radius) out.build.push(`  ${nv}->radius = SC(${na.radius});`);
+      if (na.mt || na.mb || na.ml || na.mr) out.build.push(`  ${nv}->mt = SC(${na.mt}); ${nv}->mb = SC(${na.mb}); ${nv}->ml = SC(${na.ml}); ${nv}->mr = SC(${na.mr});`);
     };
     // control height: explicit height wins; else derive from vertical padding +
     // font size (the browser/GTK box model — Win32 controls have no CSS padding,
@@ -339,7 +339,7 @@ function emit(ast, opts) {
       }
       // flat bordered input (web-like) instead of the sunken 3D CLIENTEDGE
       out.build.push(`  s->${f} = CreateWindowExA(0, "EDIT", NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
-      out.build.push(`  SendMessageA(s->${f}, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELONG(${st && st.padding != null ? Number(st.padding) : 6}, ${st && st.padding != null ? Number(st.padding) : 6}));`);
+      out.build.push(`  SendMessageA(s->${f}, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELONG(SC(${st && st.padding != null ? Number(st.padding) : 6}), SC(${st && st.padding != null ? Number(st.padding) : 6})));`);
       const ph = strAttr(a.placeholder);
       if (ph) out.build.push(`  SendMessageW(s->${f}, EM_SETCUEBANNER, TRUE, (LPARAM)L${cwstr(ph)});`);
       if (cell) {
@@ -675,12 +675,17 @@ typedef struct Node {
 static HINSTANCE g_hinst;
 static HWND g_main;
 static Node* g_root;
+static double g_scale = 1.0;            // HiDPI factor (dpi/96) — crisp + correct size
+#define SC(x) ((int)((x) * g_scale))    // scale a logical px value to physical
 
 static Node* swiss_node_new(void) { Node* n = (Node*)calloc(1, sizeof(Node)); n->w = n->h = -1; n->visible = 1; return n; }
 static Node* swiss_view(int dir, int pad, int gap, int flex, int w, int h, int justify, int align) {
-  Node* n = swiss_node_new(); n->dir = dir; n->pad = pad; n->gap = gap; n->flex = flex; n->w = w; n->h = h; n->justify = justify; n->align = align; return n;
+  Node* n = swiss_node_new(); n->dir = dir; n->pad = SC(pad); n->gap = SC(gap); n->flex = flex;
+  n->w = w < 0 ? w : SC(w); n->h = h < 0 ? h : SC(h); n->justify = justify; n->align = align; return n;
 }
-static Node* swiss_leaf(HWND hwnd, int w, int h, int flex) { Node* n = swiss_node_new(); n->hwnd = hwnd; n->w = w; n->h = h; n->flex = flex; return n; }
+static Node* swiss_leaf(HWND hwnd, int w, int h, int flex) {
+  Node* n = swiss_node_new(); n->hwnd = hwnd; n->w = w < 0 ? w : SC(w); n->h = h < 0 ? h : SC(h); n->flex = flex; return n;
+}
 static void swiss_add(Node* p, Node* c) {
   if (p->nkids >= p->kcap) { p->kcap = p->kcap ? p->kcap * 2 : 8; p->kids = (Node**)realloc(p->kids, p->kcap * sizeof(Node*)); }
   p->kids[p->nkids++] = c;
@@ -798,7 +803,7 @@ static void swiss_relayout(void) {
 static struct { int px, bold; HFONT f; } g_fonts[64]; static int g_nfonts;
 static HFONT swiss_font(int px, int bold) {
   for (int i = 0; i < g_nfonts; i++) if (g_fonts[i].px == px && g_fonts[i].bold == bold) return g_fonts[i].f;
-  int h = px ? -MulDiv(px, 96, 72) : -15;
+  int h = px ? -MulDiv(SC(px), 96, 72) : -SC(15);   // scale font for HiDPI
   HFONT f = CreateFontA(h, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
   if (g_nfonts < 64) { g_fonts[g_nfonts].px = px; g_fonts[g_nfonts].bold = bold; g_fonts[g_nfonts].f = f; g_nfonts++; }
@@ -1013,6 +1018,7 @@ ${cmdCases || '      break;'}
 int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
   (void)hp; (void)cmd;
   g_hinst = hi;
+  { HDC _dc = GetDC(NULL); int _dpi = GetDeviceCaps(_dc, LOGPIXELSX); ReleaseDC(NULL, _dc); if (_dpi > 0) g_scale = _dpi / 96.0; }  // HiDPI factor (process is per-monitor DPI-aware via the manifest)
   { INITCOMMONCONTROLSEX _ic = { sizeof(INITCOMMONCONTROLSEX), ICC_STANDARD_CLASSES | ICC_BAR_CLASSES | ICC_PROGRESS_CLASS }; InitCommonControlsEx(&_ic); }
 ${cells.filter((c) => c.cinit != null).map((c) => `  S.${c.name} = ${c.cinit};`).join('\n')}
 ${refs.map((r) => `  S.${r.name}__current = ${r.cinit};`).join('\n')}
@@ -1023,7 +1029,7 @@ ${refs.map((r) => `  S.${r.name}__current = ${r.cinit};`).join('\n')}
   wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = g_white;
   RegisterClassA(&wc);
   g_main = CreateWindowExA(0, "SwissWindow", ${cstr(opts.title || 'Swiss')},
-    WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 960, 640, NULL, NULL, hi, NULL);
+    WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, SC(960), SC(640), NULL, NULL, hi, NULL);
   g_root = swiss_build_ui(&S);
   swiss_effect(&S);
   swiss_relayout();
