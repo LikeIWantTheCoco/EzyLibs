@@ -101,6 +101,7 @@ function emit(ast, opts) {
       const init = d.init;
       if (init && init.type === 'CallExpression' && init.callee.name === 'useState') {
         const [valId, setId] = d.id.elements;
+        const setName = setId ? setId.name : '__noset_' + valId.name;   // read-only state: const [x] = useState(...)
         const a = init.arguments[0];
         let t = 'int', ctype = 'long long', cinit = '0', initNode = null, initObj = null, initArr = null;
         if (a) {
@@ -117,7 +118,7 @@ function emit(ast, opts) {
             }
           }
         }
-        cells.push({ name: valId.name, setter: setId.name, ctype, cinit, t, initNode, initObj, initArr });
+        cells.push({ name: valId.name, setter: setName, ctype, cinit, t, initNode, initObj, initArr });
       } else if (init && init.type === 'CallExpression' && init.callee.name === 'useMemo') {
         const arrow = init.arguments[0];
         const vb = arrow.body;
@@ -180,9 +181,11 @@ function emit(ast, opts) {
   };
   for (const c of cells.filter((x) => x.t === 'array')) {
     const fields = {};
+    const collectObj = (o) => { for (const p of o.properties) if ((p.type === 'ObjectProperty' || p.type === 'Property') && p.key) { const k = p.key.name || p.key.value; if (!(k in fields)) fields[k] = tInfer(p.value); } };
+    if (c.initArr) for (const el of c.initArr.elements) if (el && el.type === 'ObjectExpression') collectObj(el);  // shape from the initial array
     walk(comp, (n) => {
       if (n.type === 'CallExpression' && n.callee.type === 'Identifier' && n.callee.name === c.setter)
-        walk(n, (o) => { if (o.type === 'ObjectExpression') for (const p of o.properties) { const k = p.key.name || p.key.value; if (!(k in fields)) fields[k] = tInfer(p.value); } });
+        walk(n, (o) => { if (o.type === 'ObjectExpression') collectObj(o); });
     });
     c.fields = Object.keys(fields).map((k) => ({ name: k, t: fields[k], ctype: cType(fields[k]) }));
     c.struct = `Item_${c.name}`; c.arrtype = `Arr_${c.name}`; c.ctype = c.arrtype;
@@ -373,7 +376,11 @@ function emit(ast, opts) {
 
   // ── statement list → C lines ──
   function genStmts(body, scope, lines) {
-    const stmts = body.type === 'BlockStatement' ? body.body : [{ type: 'ExpressionStatement', expression: body }];
+    // block → its statements; a bare statement (e.g. `if (x) return;`) → itself;
+    // a bare expression (arrow `() => expr`) → wrap as an expression statement.
+    const stmts = body.type === 'BlockStatement' ? body.body
+      : /Statement$/.test(body.type) ? [body]
+      : [{ type: 'ExpressionStatement', expression: body }];
     for (const st of stmts) genStmt(st, scope, lines);
   }
   function genStmt(st, scope, lines) {
@@ -648,6 +655,8 @@ function emit(ast, opts) {
     if (f) out.build.push(`  SendMessageA(${hw}, WM_SETFONT, (WPARAM)${f}, TRUE);`);
     const col = st && colorref(st.color);
     if (col) out.build.push(`  swiss_set_color(${hw}, ${col});`);
+    const bg = kind === 'text' && st && colorref(st.backgroundColor);   // colored Text/badge
+    if (bg) out.build.push(`  swiss_set_bg(${hw}, ${bg});`);
   }
 
   // text children → an snprintf snippet writing into a control's text
@@ -1140,6 +1149,7 @@ typedef struct Node {
   int fillcross;             // fill parent cross-axis (width:100% / flex) — else content-sized (web inline-block)
   int radius;                // borderRadius (px) — rounded via a window region
   int mt, mb, ml, mr;        // margins (outer spacing around the node)
+  int rx, ry, rw, rh;        // last laid-out rect (for background painting)
   COLORREF bg; int hasbg, visible;
 } Node;
 
@@ -1197,6 +1207,7 @@ static void swiss_measure(Node* n, int* mw, int* mh) {
 }
 
 static void swiss_arrange(Node* n, int x, int y, int w, int h) {
+  n->rx = x; n->ry = y; n->rw = w; n->rh = h;   // remember rect for bg painting
   if (n->hwnd) {
     MoveWindow(n->hwnd, x, y, w, h, TRUE);
     if (n->radius > 0)  // borderRadius → clip the control to a rounded rect
@@ -1277,7 +1288,19 @@ static struct { HWND w; COLORREF c; } g_colors[128]; static int g_ncolors;
 static void swiss_set_color(HWND w, COLORREF c) { if (g_ncolors < 128) { g_colors[g_ncolors].w = w; g_colors[g_ncolors].c = c; g_ncolors++; } }
 static int swiss_get_color(HWND w, COLORREF* out) { for (int i = 0; i < g_ncolors; i++) if (g_colors[i].w == w) { *out = g_colors[i].c; return 1; } return 0; }
 
+// ── per-control background color (e.g. a colored Text/badge) ──
+static struct { HWND w; COLORREF c; HBRUSH b; } g_bgs[64]; static int g_nbgs;
+static void swiss_set_bg(HWND w, COLORREF c) { if (g_nbgs < 64) { g_bgs[g_nbgs].w = w; g_bgs[g_nbgs].c = c; g_bgs[g_nbgs].b = CreateSolidBrush(c); g_nbgs++; } }
+static int swiss_get_bg(HWND w, COLORREF* c, HBRUSH* b) { for (int i = 0; i < g_nbgs; i++) if (g_bgs[i].w == w) { *c = g_bgs[i].c; *b = g_bgs[i].b; return 1; } return 0; }
+
 static HBRUSH g_white;   // window/control background (web-like white)
+
+// paint View backgroundColor rects (containers have no HWND) — parents first,
+// so a child's bg draws over its parent's; controls then paint over the top.
+static void swiss_paint_bg(Node* n, HDC hdc) {
+  if (n->hasbg) { RECT r = { n->rx, n->ry, n->rx + n->rw, n->ry + n->rh }; HBRUSH b = CreateSolidBrush(n->bg); FillRect(hdc, &r, b); DeleteObject(b); }
+  for (int i = 0; i < n->nkids; i++) if (n->kids[i]->visible) swiss_paint_bg(n->kids[i], hdc);
+}
 
 // ── owner-drawn buttons (native Win32 buttons ignore backgroundColor/color) ──
 static struct { HWND w; COLORREF bg, fg; int radius, hasbg, hasfg; } g_btns[64]; static int g_nbtns;
@@ -1409,10 +1432,16 @@ ${cmdCases || '      break;'}
       for (int i = 0; i < g_ntimers; i++) if (g_timers[i].id == (UINT_PTR)wp) { if (!g_timers[i].repeat) KillTimer(hwnd, (UINT_PTR)wp); g_timers[i].cb(&S); break; }
       return 0;
     }
+    case WM_PAINT: {
+      PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps);
+      if (g_root) swiss_paint_bg(g_root, hdc);   // View backgroundColor rects
+      EndPaint(hwnd, &ps); return 0;
+    }
     case WM_CTLCOLORSTATIC: case WM_CTLCOLORBTN: {
-      COLORREF col; HDC dc = (HDC)wp;
+      COLORREF col, bgc; HBRUSH bgb; HDC dc = (HDC)wp;
       if (swiss_get_color((HWND)lp, &col)) SetTextColor(dc, col);
-      SetBkMode(dc, TRANSPARENT); return (LRESULT)g_white;   // white background (web-like)
+      if (swiss_get_bg((HWND)lp, &bgc, &bgb)) { SetBkColor(dc, bgc); SetBkMode(dc, OPAQUE); return (LRESULT)bgb; }  // colored Text/badge
+      SetBkMode(dc, TRANSPARENT); return (LRESULT)GetStockObject(NULL_BRUSH);   // transparent → painted View bg shows through
     }
     case WM_SIZE: swiss_relayout(); return 0;
     case WM_DESTROY: PostQuitMessage(0); return 0;

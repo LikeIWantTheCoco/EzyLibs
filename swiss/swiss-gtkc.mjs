@@ -96,13 +96,14 @@ function emit(ast, opts) {
       const init = d.init;
       if (init && init.type === 'CallExpression' && init.callee.name === 'useState') {
         const [valId, setId] = d.id.elements;
+        const setName = setId ? setId.name : '__noset_' + valId.name;   // read-only state: const [x] = useState(...)
         const a = init.arguments[0];
-        let t = 'int', ctype = 'long long', cinit = '0', initNode = null, initObj = null;
+        let t = 'int', ctype = 'long long', cinit = '0', initNode = null, initObj = null, initArr = null;
         if (a) {
           if (a.type === 'StringLiteral') { t = 'string'; ctype = 'const char*'; cinit = cstr(a.value); }
           else if (a.type === 'BooleanLiteral') { t = 'bool'; cinit = a.value ? '1' : '0'; }
           else if (a.type === 'NumericLiteral') { if (Number.isInteger(a.value)) cinit = String(a.value); else { t = 'float'; ctype = 'double'; cinit = String(a.value); } }
-          else if (a.type === 'ArrayExpression') { t = 'array'; ctype = null; cinit = null; } // array-of-records state
+          else if (a.type === 'ArrayExpression') { t = 'array'; ctype = null; cinit = null; initArr = a; } // array-of-records state
           else if (a.type === 'ObjectExpression') { t = 'object'; ctype = null; cinit = null; initObj = a; } // object record state
           else { // non-literal init (e.g. ezy.call) → assigned in swiss_init
             initNode = a;
@@ -112,7 +113,7 @@ function emit(ast, opts) {
             }
           }
         }
-        cells.push({ name: valId.name, setter: setId.name, ctype, cinit, t, initNode, initObj });
+        cells.push({ name: valId.name, setter: setName, ctype, cinit, t, initNode, initObj, initArr });
       } else if (init && init.type === 'CallExpression' && init.callee.name === 'useMemo') {
         // derived value: const x = useMemo(() => expr, [deps]) → recomputed cell
         const arrow = init.arguments[0];
@@ -176,9 +177,11 @@ function emit(ast, opts) {
   };
   for (const c of cells.filter((x) => x.t === 'array')) {
     const fields = {};
+    const collectObj = (o) => { for (const p of o.properties) if ((p.type === 'ObjectProperty' || p.type === 'Property') && p.key) { const k = p.key.name || p.key.value; if (!(k in fields)) fields[k] = tInfer(p.value); } };
+    if (c.initArr) for (const el of c.initArr.elements) if (el && el.type === 'ObjectExpression') collectObj(el);  // shape from the initial array
     walk(comp, (n) => {
       if (n.type === 'CallExpression' && n.callee.type === 'Identifier' && n.callee.name === c.setter)
-        walk(n, (o) => { if (o.type === 'ObjectExpression') for (const p of o.properties) { const k = p.key.name || p.key.value; if (!(k in fields)) fields[k] = tInfer(p.value); } });
+        walk(n, (o) => { if (o.type === 'ObjectExpression') collectObj(o); });
     });
     c.fields = Object.keys(fields).map((k) => ({ name: k, t: fields[k], ctype: cType(fields[k]) }));
     c.struct = `Item_${c.name}`; c.arrtype = `Arr_${c.name}`; c.ctype = c.arrtype;
@@ -386,7 +389,9 @@ function emit(ast, opts) {
 
   // ── statement list → C lines ──
   function genStmts(body, scope, lines) {
-    const stmts = body.type === 'BlockStatement' ? body.body : [{ type: 'ExpressionStatement', expression: body }];
+    const stmts = body.type === 'BlockStatement' ? body.body
+      : /Statement$/.test(body.type) ? [body]
+      : [{ type: 'ExpressionStatement', expression: body }];
     for (const st of stmts) genStmt(st, scope, lines);
   }
   function genStmt(st, scope, lines) {
@@ -621,7 +626,8 @@ function emit(ast, opts) {
       if (raw == null) continue;
       const s = String(raw);
       if (k === 'padding') o.padding = num(s);
-      else if (k === 'margin') { if (/auto/.test(s)) o.alignItems = 'center'; else o.margin = num(s); }
+      else if (k === 'margin') { if (/auto/.test(s)) o.alignSelf = 'center'; else o.margin = num(s); }
+      else if (k === 'alignSelf') o.alignSelf = s;
       else if (k === 'marginTop') o.marginTop = num(s);
       else if (k === 'marginBottom') o.marginBottom = num(s);
       else if (k === 'marginLeft') o.marginLeft = num(s);
@@ -714,8 +720,10 @@ function emit(ast, opts) {
     // minimum GTK won't shrink below its natural height, so a smaller explicit
     // height would be ignored — min-height can actually reduce it).
     if (st.width != null) out.build.push(`  gtk_widget_set_size_request(${v}, ${Number(st.width)}, -1);`);
-    if (st.alignItems && ALIGN[st.alignItems]) out.build.push(`  gtk_widget_set_halign(${v}, ${ALIGN[st.alignItems]});`);
-    if (st.justifyContent && ALIGN[st.justifyContent]) out.build.push(`  gtk_widget_set_valign(${v}, ${ALIGN[st.justifyContent]});`);
+    // alignSelf / margin:auto → the box's OWN cross-align (e.g. a centered
+    // maxWidth block). alignItems is the children's cross-align, handled by the
+    // box's natural packing — it must NOT self-align (and shrink) the container.
+    if (st.alignSelf && ALIGN[st.alignSelf]) out.build.push(`  gtk_widget_set_halign(${v}, ${ALIGN[st.alignSelf]});`);
   }
   // GtkLabel centers its text by default; honor CSS textAlign (default: left).
   // halign START → content-sized & left (web-like), unless it should fill.
@@ -1214,6 +1222,12 @@ function emit(ast, opts) {
       const fn = p.key.name || p.key.value; const f = c.fields.find((x) => x.name === fn);
       initCellLines.push(`  s->${c.name}.${fn} = ${f && f.t === 'string' ? `g_strdup(${cexpr(p.value, {}).c})` : cexpr(p.value, {}).c};`);
     }
+  // seed initial array-state elements (useState([{…}, …]))
+  for (const c of arrayCells)
+    if (c.initArr) for (const el of c.initArr.elements)
+      if (el && el.type === 'ObjectExpression') initCellLines.push(`  arrpush_${c.name}(&s->${c.name}, ${objLit(c, el, {})});`);
+  // render seeded list/map rows once at startup (before any state change)
+  for (const L of out.lists) initLines.push(`  ${L.rebuildFn}(s);`);
 
   // cell update functions
   for (const c of cells)
