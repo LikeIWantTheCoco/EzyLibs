@@ -650,12 +650,14 @@ function emit(ast, opts) {
     return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross, radius };
   }
   // apply font + text color to a freshly created control hwnd expr
-  function applyControl(hw, st, kind) {
+  function applyControl(hw, st, kind, inheritBg) {
     const f = fontFor(st) || (kind === 'text' && st && st.fontWeight === 'bold' ? 'swiss_font(0, 1)' : null);
     if (f) out.build.push(`  SendMessageA(${hw}, WM_SETFONT, (WPARAM)${f}, TRUE);`);
     const col = st && colorref(st.color);
     if (col) out.build.push(`  swiss_set_color(${hw}, ${col});`);
-    const bg = kind === 'text' && st && colorref(st.backgroundColor);   // colored Text/badge
+    // a Text paints opaque on its own backgroundColor, else the inherited panel
+    // bg (so text on a colored View shows correctly without transparency)
+    const bg = kind === 'text' ? ((st && colorref(st.backgroundColor)) || inheritBg) : null;
     if (bg) out.build.push(`  swiss_set_bg(${hw}, ${bg});`);
   }
 
@@ -730,7 +732,10 @@ function emit(ast, opts) {
       out.build.push(`  Node* ${v} = swiss_view(${na.dir}, ${na.pad}, ${na.gap}, ${na.flex}, ${na.w}, ${na.h}, ${na.justify}, ${na.align});`);
       const bg = st && colorref(st.backgroundColor);
       if (bg) out.build.push(`  ${v}->bg = ${bg}; ${v}->hasbg = 1;`);
-      const childScope = tag === 'form' && a.onSubmit ? { ...scope, __form: a.onSubmit } : scope;
+      // propagate the effective panel background to descendants so their text
+      // controls paint opaque on the right color (no transparency → no flicker)
+      let childScope = { ...scope, __bg: bg || scope.__bg };
+      if (tag === 'form' && a.onSubmit) childScope.__form = a.onSubmit;
       buildChildren(el.children, v, childScope);
       selfStep(v); pack(v); return v;
     }
@@ -747,7 +752,7 @@ function emit(ast, opts) {
         if (scope.__inrow) {
           const hw = ctl('"STATIC"', ssAlign, 'NULL', 'text');
           out.build.push(`  ${textSnippet(el, scope, hw).snippet}`);
-          applyControl(hw, st, 'text'); const n = vid('n');
+          applyControl(hw, st, 'text', scope.__bg); const n = vid('n');
           out.build.push(`  Node* ${n} = ${mkNode(hw)};`); selfStep(n); pack(n); return n;
         }
         const f = vid('lbl'); stateFields.push(`  HWND ${f};`);
@@ -755,11 +760,11 @@ function emit(ast, opts) {
         const real = textSnippet(el, scope, `s->${f}`);
         out.build.push(`  ${real.snippet}`);
         info.reads.forEach((cn) => deps[cn].push(real.snippet));
-        applyControl(`s->${f}`, st, 'text');
+        applyControl(`s->${f}`, st, 'text', scope.__bg);
         const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(`s->${f}`)};`); selfStep(n); pack(n); return n;
       }
       const hw = ctl('"STATIC"', ssAlign, cstr(info.staticText), 'text');
-      applyControl(hw, st, 'text');
+      applyControl(hw, st, 'text', scope.__bg);
       const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(hw)};`); selfStep(n); pack(n); return n;
     }
     if (name === 'Button') {
@@ -852,7 +857,7 @@ function emit(ast, opts) {
         out.build.push(`  SendMessageA(s->${f}, BM_SETCHECK, s->${cell.name} ? BST_CHECKED : BST_UNCHECKED, 0);`);
         deps[cell.name].push(`SendMessageA(s->${f}, BM_SETCHECK, s->${cell.name} ? BST_CHECKED : BST_UNCHECKED, 0);`);
       }
-      applyControl(`s->${f}`, st, 'text');
+      applyControl(`s->${f}`, st, 'text', scope.__bg);
       const n = vid('n'); out.build.push(`  Node* ${n} = swiss_leaf(s->${f}, ${na.w}, ${na.h < 0 ? 22 : na.h}, ${na.flex});`); selfStep(n); pack(n); return n;
     }
     if (name === 'Select') {
@@ -913,7 +918,7 @@ function emit(ast, opts) {
       out.build.push(`  s->${box} = swiss_view(0, ${na.pad}, ${na.gap || 6}, ${na.flex}, ${na.w}, ${na.h}, ${na.justify}, 3);`);
       const rowFn = `swiss_row_${out.lists.length}`;
       const rebuildFn = `swiss_list_rebuild_${out.lists.length}`;
-      out.lists.push({ box, rowFn, rebuildFn, itemFn, idxName, countCell });
+      out.lists.push({ box, rowFn, rebuildFn, itemFn, idxName, countCell, bg: st && colorref(st.backgroundColor) || scope.__bg });
       if (countCell) deps[countCell.name].push(`${rebuildFn}(s);`);
       pack(`s->${box}`); return `s->${box}`;
     }
@@ -958,7 +963,7 @@ function emit(ast, opts) {
     const box = vid('map'); stateFields.push(`  Node* ${box};`);
     out.build.push(`  s->${box} = swiss_view(0, 0, 6, 0, -1, -1, 0, 3);`);
     if (parent) out.build.push(`  swiss_add(${parent}, s->${box});`);
-    out.lists.push({ kind: 'map', box, rowFn: `swiss_map_${out.lists.length}`, rebuildFn: `swiss_maprebuild_${out.lists.length}`, itemJSX, itName, idxParam, cell, filterArrow });
+    out.lists.push({ kind: 'map', box, rowFn: `swiss_map_${out.lists.length}`, rebuildFn: `swiss_maprebuild_${out.lists.length}`, itemJSX, itName, idxParam, cell, filterArrow, bg: scope.__bg });
     const L = out.lists[out.lists.length - 1];
     const reads = cellsIn(itemJSX); reads.add(cell.name);
     if (filterArrow) cellsIn(filterArrow.body).forEach((c) => reads.add(c));
@@ -1049,6 +1054,7 @@ function emit(ast, opts) {
         rowScope[idxVar] = { c: idxVar, t: 'int' };
         jsx = L.itemFn.body; countC = L.countCell ? 's->' + L.countCell.name : '0';
       }
+      if (L.bg) rowScope.__bg = L.bg;   // rows inherit the list container's panel bg (opaque text)
       const rootVar = build(stripParens(jsx), null, rowScope);
       const rowBody = out.build; out.build = saved;
       out.fns.push(`static Node* ${L.rowFn}(SwissState* s, long long ${idxVar}) {\n${rowBody.join('\n')}\n  return ${rootVar};\n}`);
@@ -1207,11 +1213,14 @@ static void swiss_measure(Node* n, int* mw, int* mh) {
 }
 
 static void swiss_arrange(Node* n, int x, int y, int w, int h) {
+  int moved = (n->rx != x || n->ry != y || n->rw != w || n->rh != h);  // skip no-op moves (less flicker)
   n->rx = x; n->ry = y; n->rw = w; n->rh = h;   // remember rect for bg painting
   if (n->hwnd) {
-    MoveWindow(n->hwnd, x, y, w, h, TRUE);
-    if (n->radius > 0)  // borderRadius → clip the control to a rounded rect
-      SetWindowRgn(n->hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, n->radius * 2, n->radius * 2), TRUE);
+    if (moved) {
+      MoveWindow(n->hwnd, x, y, w, h, TRUE);
+      if (n->radius > 0)  // borderRadius → clip the control to a rounded rect
+        SetWindowRgn(n->hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, n->radius * 2, n->radius * 2), TRUE);
+    }
     return;
   }
   int ix = x + n->pad, iy = y + n->pad, iw = w - 2 * n->pad, ih = h - 2 * n->pad;
@@ -1267,9 +1276,9 @@ static void swiss_relayout(void) {
   int rx = 0;
   if (rw < W) { if (g_root->selfalign == 1) rx = (W - rw) / 2; else if (g_root->selfalign == 2) rx = W - rw; }
   swiss_arrange(g_root, rx, 0, rw, rh);
-  // repaint the whole client so areas vacated by moved controls are cleared
-  // (otherwise relayout after a state change leaves ghost text behind)
-  InvalidateRect(g_main, NULL, TRUE);
+  // repaint backgrounds (WM_PAINT double-buffers; erase suppressed) so vacated
+  // areas clear without the full-white-flash flicker of an erasing invalidate
+  InvalidateRect(g_main, NULL, FALSE);
 }
 
 // ── font cache (size 0 = default UI size) ──
@@ -1432,16 +1441,28 @@ ${cmdCases || '      break;'}
       for (int i = 0; i < g_ntimers; i++) if (g_timers[i].id == (UINT_PTR)wp) { if (!g_timers[i].repeat) KillTimer(hwnd, (UINT_PTR)wp); g_timers[i].cb(&S); break; }
       return 0;
     }
+    case WM_ERASEBKGND: return 1;   // suppress default erase (WM_PAINT handles bg) — no flicker
     case WM_PAINT: {
       PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps);
-      if (g_root) swiss_paint_bg(g_root, hdc);   // View backgroundColor rects
+      RECT rc; GetClientRect(hwnd, &rc);
+      // double-buffer: paint white + View bg rects to a memory DC, then blit once
+      HDC mem = CreateCompatibleDC(hdc);
+      HBITMAP bmp = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+      HGDIOBJ ob = SelectObject(mem, bmp);
+      FillRect(mem, &rc, g_white);
+      if (g_root) swiss_paint_bg(g_root, mem);   // View backgroundColor rects
+      BitBlt(hdc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
+      SelectObject(mem, ob); DeleteObject(bmp); DeleteDC(mem);
       EndPaint(hwnd, &ps); return 0;
     }
     case WM_CTLCOLORSTATIC: case WM_CTLCOLORBTN: {
       COLORREF col, bgc; HBRUSH bgb; HDC dc = (HDC)wp;
       if (swiss_get_color((HWND)lp, &col)) SetTextColor(dc, col);
-      if (swiss_get_bg((HWND)lp, &bgc, &bgb)) { SetBkColor(dc, bgc); SetBkMode(dc, OPAQUE); return (LRESULT)bgb; }  // colored Text/badge
-      SetBkMode(dc, TRANSPARENT); return (LRESULT)GetStockObject(NULL_BRUSH);   // transparent → painted View bg shows through
+      // opaque fill with the control's bg (own/inherited panel color, else white)
+      // so static text is correct without transparency — lets WS_CLIPCHILDREN
+      // suppress repaint flicker
+      if (swiss_get_bg((HWND)lp, &bgc, &bgb)) { SetBkColor(dc, bgc); SetBkMode(dc, OPAQUE); return (LRESULT)bgb; }
+      SetBkColor(dc, RGB(255, 255, 255)); SetBkMode(dc, OPAQUE); return (LRESULT)g_white;
     }
     case WM_SIZE: swiss_relayout(); return 0;
     case WM_DESTROY: PostQuitMessage(0); return 0;
@@ -1462,7 +1483,7 @@ ${refs.map((r) => `  S.${r.name}__current = ${r.cinit};`).join('\n')}
   wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = g_white;
   RegisterClassA(&wc);
   g_main = CreateWindowExA(0, "SwissWindow", ${cstr(opts.title || 'Swiss')},
-    WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 960, 640, NULL, NULL, hi, NULL);
+    WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 960, 640, NULL, NULL, hi, NULL);
   g_root = swiss_build_ui(&S);
   swiss_effect(&S);
   swiss_relayout();

@@ -635,6 +635,7 @@ function emit(ast, opts) {
       else if (k === 'width') { if (s === '100%') o.fillCross = true; else o.width = num(s); }
       else if (k === 'maxWidth' || k === 'minWidth') o.width = num(s);
       else if (k === 'height' || k === 'maxHeight' || k === 'minHeight') o.height = num(s);
+      else if (k === 'flex' || k === 'flexGrow') o.flex = num(s);
       else if (k === 'fontSize') o.fontSize = num(s);
       else if (k === 'fontWeight') o.fontWeight = s;
       else if (k === 'color') o.color = s;
