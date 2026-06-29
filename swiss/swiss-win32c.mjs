@@ -850,12 +850,22 @@ static void swiss_relayout(void) {
 }
 
 // ── font cache (size 0 = default UI size) ──
+// face chosen at startup: DejaVu Sans if present (Linux/wine → matches the GTK
+// target) else Segoe UI (native Windows, what GTK would also use there)
+static const char* g_fontface = "Segoe UI";
+static int CALLBACK swiss_fontprobe(const LOGFONTA* lf, const TEXTMETRICA* tm, DWORD ty, LPARAM lp) { (void)lf; (void)tm; (void)ty; *(int*)lp = 1; return 0; }
+static void swiss_pick_font(void) {
+  HDC dc = GetDC(NULL); int found = 0;
+  EnumFontFamiliesA(dc, "DejaVu Sans", swiss_fontprobe, (LPARAM)&found);
+  ReleaseDC(NULL, dc);
+  if (found) g_fontface = "DejaVu Sans";
+}
 static struct { int px, bold; HFONT f; } g_fonts[64]; static int g_nfonts;
 static HFONT swiss_font(int px, int bold) {
   for (int i = 0; i < g_nfonts; i++) if (g_fonts[i].px == px && g_fonts[i].bold == bold) return g_fonts[i].f;
   int h = px ? -MulDiv(SC(px), 96, 72) : -SC(15);   // scale font for HiDPI
   HFONT f = CreateFontA(h, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-    OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
+    OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, g_fontface);
   if (g_nfonts < 64) { g_fonts[g_nfonts].px = px; g_fonts[g_nfonts].bold = bold; g_fonts[g_nfonts].f = f; g_nfonts++; }
   return f;
 }
@@ -1078,6 +1088,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE hp, LPSTR cmd, int show) {
   g_hinst = hi;
   { HDC _dc = GetDC(NULL); int _dpi = GetDeviceCaps(_dc, LOGPIXELSX); ReleaseDC(NULL, _dc); if (_dpi > 0) g_scale = _dpi / 96.0; }  // HiDPI factor (process is per-monitor DPI-aware via the manifest)
   { ULONG_PTR _gp; GdiplusStartupInput _gi = { 1, NULL, FALSE, FALSE }; GdiplusStartup(&_gp, &_gi, NULL); }   // antialiased control rendering
+  swiss_pick_font();   // DejaVu Sans where available (matches the GTK target), else Segoe UI
   { INITCOMMONCONTROLSEX _ic = { sizeof(INITCOMMONCONTROLSEX), ICC_STANDARD_CLASSES | ICC_BAR_CLASSES | ICC_PROGRESS_CLASS }; InitCommonControlsEx(&_ic); }
 ${cells.filter((c) => c.cinit != null).map((c) => `  S.${c.name} = ${c.cinit};`).join('\n')}
 ${refs.map((r) => `  S.${r.name}__current = ${r.cinit};`).join('\n')}
