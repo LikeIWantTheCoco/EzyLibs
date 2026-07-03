@@ -1003,7 +1003,7 @@ static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
     // GTK-like edge realism: a very slight top→bottom gradient, a crisp border,
     // and a faint lighter rim along the top inner edge
     ARGB hl = (0xB0u << 24) | (C2A(swiss_lighten(bg, 140)) & 0x00FFFFFF);
-    swiss_fill_round_hl(d->hDC, d->rcItem, r, C2A(swiss_lighten(bg, 112)), C2A(swiss_darken(bg, 82)), border, focus ? 2.0f : 1.0f, hl);
+    swiss_fill_round_hl(d->hDC, d->rcItem, r, C2A(swiss_lighten(bg, 118)), C2A(swiss_darken(bg, 78)), border, focus ? 2.0f : 1.0f, hl);
     SetBkMode(d->hDC, TRANSPARENT);   // let the gradient show behind the text (grayscale AA is fine on a colored button)
     SetTextColor(d->hDC, g_btns[i].hasfg ? g_btns[i].fg : GetSysColor(COLOR_BTNTEXT));
     HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0);
