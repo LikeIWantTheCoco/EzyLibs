@@ -727,14 +727,16 @@ static void swiss_fill_round_grad(HDC hdc, RECT rc, int r, ARGB top, ARGB bot, A
   if (bw > 0) { GpPen* pen = NULL; GdipCreatePen1(border, bw, 2, &pen); if (pen) { GdipDrawPath(g, pen, p); GdipDeletePen(pen); } }
   GdipDeletePath(p); GdipDeleteGraphics(g);
 }
-// GTK-style button: flat fill + 1px border + a faint lighter rim along the top
-// inner edge (subtle raised realism, not a gradient)
-static void swiss_fill_round_hl(HDC hdc, RECT rc, int r, ARGB fill, ARGB border, float bw, ARGB hl) {
+// GTK-style button: very subtle top→bottom gradient + 1px border + a faint
+// lighter rim along the top inner edge (raised realism, matches GTK closely)
+static void swiss_fill_round_hl(HDC hdc, RECT rc, int r, ARGB top, ARGB bot, ARGB border, float bw, ARGB hl) {
   GpGraphics* g = NULL; if (GdipCreateFromHDC(hdc, &g) != 0 || !g) return;
   GdipSetSmoothingMode(g, 4);
   GpPath* p = NULL; GdipCreatePath(0, &p);
   swiss_round_path(p, (float)rc.left + 0.5f, (float)rc.top + 0.5f, (float)(rc.right - rc.left) - 1, (float)(rc.bottom - rc.top) - 1, (float)r);
-  GpBrush* b = NULL; GdipCreateSolidFill(fill, &b); GdipFillPath(g, b, p); GdipDeleteBrush(b);
+  GpRectI gr = { rc.left, rc.top, rc.right - rc.left, (rc.bottom - rc.top) + 1 };
+  GpBrush* b = NULL; GdipCreateLineBrushFromRectI(&gr, top, bot, 1 /* vertical */, 0, &b);
+  if (b) { GdipFillPath(g, b, p); GdipDeleteBrush(b); }
   // top inner highlight line, inset by the corner radius
   GpPen* hp = NULL; GdipCreatePen1(hl, 1.3f, 2, &hp);
   if (hp) { GdipDrawLine(g, hp, (float)rc.left + r + 1, (float)rc.top + 1.6f, (float)rc.right - r - 1, (float)rc.top + 1.6f); GdipDeletePen(hp); }
@@ -998,9 +1000,10 @@ static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
     // every button gets a 1px border for definition (GTK-like): a darker shade
     // of its own color when colored, a neutral gray when plain, accent when focused
     ARGB border = focus ? C2A(RGB(0, 102, 204)) : plain ? C2A(RGB(205, 208, 212)) : C2A(swiss_darken(bg, 82));
-    // GTK-like edge realism: flat fill + 1px border + a faint lighter top rim
-    ARGB hl = (0xA0u << 24) | (C2A(swiss_lighten(bg, 140)) & 0x00FFFFFF);
-    swiss_fill_round_hl(d->hDC, d->rcItem, r, C2A(bg), border, focus ? 2.0f : 1.0f, hl);
+    // GTK-like edge realism: a very slight top→bottom gradient, a crisp border,
+    // and a faint lighter rim along the top inner edge
+    ARGB hl = (0xA0u << 24) | (C2A(swiss_lighten(bg, 138)) & 0x00FFFFFF);
+    swiss_fill_round_hl(d->hDC, d->rcItem, r, C2A(swiss_lighten(bg, 106)), C2A(swiss_darken(bg, 97)), border, focus ? 2.0f : 1.0f, hl);
     SetBkColor(d->hDC, bg); SetBkMode(d->hDC, OPAQUE);   // opaque over the solid fill → subpixel ClearType text
     SetTextColor(d->hDC, g_btns[i].hasfg ? g_btns[i].fg : GetSysColor(COLOR_BTNTEXT));
     HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0);
