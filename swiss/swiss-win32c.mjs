@@ -997,14 +997,11 @@ static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
     HBRUSH bb = CreateSolidBrush(g_btns[i].behind); FillRect(d->hDC, &d->rcItem, bb); DeleteObject(bb);
     int r = g_btns[i].radius;
     int focus = (d->itemState & ODS_FOCUS) ? 1 : 0;
-    // every button gets a 1px border for definition (GTK-like): a darker shade
-    // of its own color when colored, a neutral gray when plain, accent when focused
-    ARGB border = focus ? C2A(RGB(0, 102, 204)) : plain ? C2A(RGB(205, 208, 212)) : C2A(swiss_darken(bg, 82));
-    // GTK-like edge realism: a very slight top→bottom gradient, a crisp border,
-    // and a faint lighter rim along the top inner edge
-    ARGB hl = (0xB0u << 24) | (C2A(swiss_lighten(bg, 140)) & 0x00FFFFFF);
-    swiss_fill_round_hl(d->hDC, d->rcItem, r, C2A(swiss_lighten(bg, 118)), C2A(swiss_darken(bg, 78)), border, focus ? 2.0f : 1.0f, hl);
-    SetBkMode(d->hDC, TRANSPARENT);   // let the gradient show behind the text (grayscale AA is fine on a colored button)
+    // flat JSX/web look: solid fill, no gradient/rim. Colored buttons have no
+    // border; plain (no-bg) buttons get a light gray border; focus adds a ring.
+    ARGB border = focus ? C2A(RGB(0, 102, 204)) : plain ? C2A(RGB(205, 208, 212)) : 0;
+    swiss_fill_round(d->hDC, d->rcItem, r, C2A(bg), border, (focus || plain) ? (focus ? 2.0f : 1.0f) : 0.0f);
+    SetBkMode(d->hDC, TRANSPARENT);
     SetTextColor(d->hDC, g_btns[i].hasfg ? g_btns[i].fg : GetSysColor(COLOR_BTNTEXT));
     HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0);
     HGDIOBJ of = f ? SelectObject(d->hDC, f) : NULL;
