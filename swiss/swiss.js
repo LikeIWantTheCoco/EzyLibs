@@ -28,7 +28,7 @@ export function setTheme(dark) {
 }
 
 export function render(element, container, opts) {
-  if (container) { container.style.fontFamily = SWISS_FONT; container.style.fontSize = '15px'; }
+  if (container) { container.style.fontFamily = SWISS_FONT; container.style.fontSize = '15px'; container.style.lineHeight = '1.5'; }
   setTheme(false);   // light default
   if (opts && opts.backend) {
     connectEzy(opts.backend, opts.sigs || {}).then((impl) => {

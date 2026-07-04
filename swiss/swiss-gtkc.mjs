@@ -207,6 +207,12 @@ function emit(ast, opts) {
     const xa = ta === 'center' ? '0.5' : ta === 'right' ? '1.0' : '0.0';
     out.build.push(`  gtk_widget_set_halign(${target}, ${ha});`);
     out.build.push(`  gtk_label_set_xalign(GTK_LABEL(${target}), ${xa});`);
+    // web-like wrapping: a constrained label (explicit width / fill / flex) wraps
+    // its text like a <span> in a sized box; content-sized labels stay one line.
+    if (st && (st.width != null || st.fillCross || st.flex)) {
+      out.build.push(`  gtk_label_set_line_wrap(GTK_LABEL(${target}), TRUE);`);
+      out.build.push(`  gtk_label_set_line_wrap_mode(GTK_LABEL(${target}), PANGO_WRAP_WORD_CHAR);`);
+    }
   }
   // leaf controls (button/entry/…) are content-sized by default (web inline-
   // block); fill the cross-axis only on width:100% / flex. An explicit px width
