@@ -795,12 +795,15 @@ static void swiss_set_theme(long long dark) {
   // shape: flat, rounded, padded controls + a web-like accent focus ring — same
   // in both themes
   const char* shape =
-    "entry, button, combobox { border-radius:4px; min-height:0; transition:120ms; }"
+    // GTK draws the entry placeholder with the theme's named color (often an
+    // accent like orange) that a plain CSS color rule cannot reach — redefine
+    // that named color so the placeholder is a neutral dark like web/win32.
+    "@define-color placeholder_text_color #333333;"
+    " entry, button, combobox { border-radius:4px; min-height:0; transition:120ms; }"
     " button { border:none; box-shadow:none; background-image:none; text-shadow:none; }"   // flat like JSX/web (drop the theme's border/bevel)
     " button:hover, button:active { background-image:none; }"                               // no hover/press shading (JSX declares no :hover)
     " entry { padding:4px 8px; border:1px solid #cccccc; }"
     " entry:focus { border-color:#0066cc; }"
-    " entry placeholder, entry text placeholder { color:#94a3b8; }"   // JSX/web-like gray placeholder (override the system theme's accent)
     " button:focus, entry:focus, combobox:focus { outline-color:#0066cc; outline-style:solid; outline-width:2px; }";
   char* css = g_strconcat(shape, dark
     ? " window { background-color:#1e1e1e; color:#e6e6e6; } entry, textview, text { background-color:#2a2a2a; color:#e6e6e6; } entry { border-color:#444; }"
