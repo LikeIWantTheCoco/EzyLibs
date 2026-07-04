@@ -119,6 +119,7 @@ function emit(ast, opts) {
       else if (k === 'alignItems') o.alignItems = s;
       else if (k === 'justifyContent') o.justifyContent = s;
       else if (k === 'border') { if (s !== 'none') { const m = s.match(/(\d+)px\s+\w+\s+(\S+)/); if (m) { o.borderWidth = parseInt(m[1]); o.borderColor = m[2]; } } }
+      else if (k === 'overflow' || k === 'overflowY') o.overflow = s;
     }
     return o;
   }
@@ -282,10 +283,20 @@ function emit(ast, opts) {
       const v = vid('v');
       const dir = st && st.flexDirection === 'row' ? 'GTK_ORIENTATION_HORIZONTAL' : 'GTK_ORIENTATION_VERTICAL';
       out.build.push(`  GtkWidget* ${v} = gtk_box_new(${dir}, ${Number((st && st.gap) || 0)});`);
-      applyStyle(v, st); addClass(v);
       // <form onSubmit={h}>: children inputs/submit-buttons trigger h
       const childScope = tag === 'form' && a.onSubmit ? { ...scope, __form: a.onSubmit } : scope;
       buildChildren(el.children, v, childScope);
+      // overflow: auto/scroll → wrap the box in a scrolled window (web-like scroll)
+      if (st && (st.overflow === 'auto' || st.overflow === 'scroll')) {
+        const sc = vid('sc');
+        out.build.push(`  GtkWidget* ${sc} = gtk_scrolled_window_new(NULL, NULL);`);
+        out.build.push(`  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(${sc}), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);`);
+        if (st.height != null) out.build.push(`  gtk_widget_set_size_request(${sc}, -1, ${Number(st.height)}); gtk_scrolled_window_set_propagate_natural_height(GTK_SCROLLED_WINDOW(${sc}), FALSE);`);
+        applyStyle(sc, st); addClass(sc);
+        out.build.push(`  gtk_container_add(GTK_CONTAINER(${sc}), ${v});`);
+        pack(sc); return sc;
+      }
+      applyStyle(v, st); addClass(v);
       pack(v); return v;
     }
     if (name === 'ScrollView') {
