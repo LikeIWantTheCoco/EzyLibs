@@ -85,6 +85,7 @@ function emit(ast, opts) {
       else if (k === 'textDecoration') o.textDecoration = s;
       else if (k === 'textTransform') o.textTransform = s;
       else if (k === 'letterSpacing') o.letterSpacing = num(s);
+      else if (k === 'lineHeight') o.lineHeight = Number(s);
       else if (k === 'color') o.color = s;
       else if (k === 'backgroundColor' || k === 'background') o.backgroundColor = s;
       else if (k === 'borderRadius') o.borderRadius = num(s);
@@ -296,11 +297,16 @@ function emit(ast, opts) {
     if (name === 'Text') {
       const info = textSnippet(el, scope, '');
       const ssAlign = st && st.textAlign === 'center' ? 'SS_CENTER' : st && st.textAlign === 'right' ? 'SS_RIGHT' : 'SS_LEFT';  // honor JSX textAlign (default left)
-      // a Text with backgroundColor is an owner-drawn rounded pill (badge/chip)
+      // owner-draw a Text when it needs a pill background, letterSpacing or
+      // lineHeight — a native STATIC can't do any of those.
       const pillBg = st && colorref(st.backgroundColor);
+      const spacing = st && st.letterSpacing ? Number(st.letterSpacing) : 0;
+      const lineh = st && st.lineHeight ? Math.round(Number(st.lineHeight) * 100) : 0;
+      const ownerDraw = pillBg || spacing || lineh;
       const pillAlign = st && st.textAlign === 'center' ? 1 : st && st.textAlign === 'right' ? 2 : 0;
-      const sstyle = pillBg ? 'SS_OWNERDRAW | SS_NOTIFY' : ssAlign;
-      const regPill = (hw) => { if (pillBg) out.build.push(`  swiss_pill_style(${hw}, ${pillBg}, ${(st && colorref(st.color)) || 'RGB(255,255,255)'}, ${(scope && scope.__bg) || 'g_bgcol'}, SC(${na.radius || 6}), ${pillAlign});`); };
+      const pillFg = (st && colorref(st.color)) || (pillBg ? 'RGB(255,255,255)' : 'g_fgcol');
+      const sstyle = ownerDraw ? 'SS_OWNERDRAW | SS_NOTIFY' : ssAlign;
+      const regPill = (hw) => { if (ownerDraw) out.build.push(`  swiss_pill_style(${hw}, ${pillBg || '0'}, ${pillBg ? 1 : 0}, ${pillFg}, ${(scope && scope.__bg) || 'g_bgcol'}, SC(${na.radius || 6}), ${pillAlign}, SC(${spacing}), ${lineh});`); };
       if (info.dynamic) {
         if (scope.__inrow) {
           const hw = ctl('"STATIC"', sstyle, 'NULL', 'text');
@@ -767,6 +773,7 @@ static double g_scale = 1.0;            // HiDPI factor (dpi/96) — crisp + cor
 #define SC(x) ((int)((x) * g_scale))    // scale a logical px value to physical
 static int swiss_is_btn(HWND);          // (defined below; used by the layout)
 static int swiss_is_pill(HWND);
+static void swiss_pill_metrics(HWND, int*, int*);   // (spacing, lineh) for measuring owner-draw text
 
 static Node* swiss_node_new(void) { Node* n = (Node*)calloc(1, sizeof(Node)); n->w = n->h = -1; n->visible = 1; return n; }
 static Node* swiss_view(int dir, int pad, int gap, int flex, int w, int h, int justify, int align) {
@@ -799,6 +806,15 @@ static void swiss_measure_leaf(Node* n, int* mw, int* mh) {
     HGDIOBJ old = f ? SelectObject(dc, f) : NULL; SIZE sz = {0, 0};
     GetTextExtentPoint32A(dc, buf, len, &sz); if (old) SelectObject(dc, old); ReleaseDC(n->hwnd, dc);
     tw = sz.cx; th = sz.cy ? sz.cy : 18;
+    if (isstat) {   // owner-draw text: letterSpacing widens, lineHeight heightens
+      int sp = 0, lh = 0; swiss_pill_metrics(n->hwnd, &sp, &lh);
+      if (sp) tw += len * sp;
+      if (lh > 0) {
+        int lines = 1; for (int j = 0; j < len; j++) if (buf[j] == '\\n') lines++;
+        if (n->w > 0 && sz.cx > n->w) { int wl = (sz.cx + n->w - 1) / n->w; if (wl > lines) lines = wl; }  // wrapped lines
+        th = th * lh / 100 * lines;
+      }
+    }
   }
   *mw = (n->w >= 0) ? n->w : (isbtn ? tw + 28 : isstat ? tw + 2 : 160);
   *mh = (n->h >= 0) ? n->h : (isbtn ? th + 12 : th);
@@ -1084,22 +1100,47 @@ static int swiss_combo_draw(LPDRAWITEMSTRUCT d) {
   return 1;
 }
 // a Text with backgroundColor → an owner-drawn rounded pill (badges/chips), AA
-static struct { HWND w; COLORREF bg, fg, behind; int radius, align; } g_pills[64]; static int g_npills;
-static void swiss_pill_style(HWND w, COLORREF bg, COLORREF fg, COLORREF behind, int radius, int align) {
-  if (g_npills < 64) { g_pills[g_npills].w = w; g_pills[g_npills].bg = bg; g_pills[g_npills].fg = fg; g_pills[g_npills].behind = behind; g_pills[g_npills].radius = radius; g_pills[g_npills].align = align; g_npills++; }
+// owner-drawn Text: a rounded pill (backgroundColor) and/or letterSpacing /
+// lineHeight, which native STATIC controls can't do (system-drawn).
+static struct { HWND w; COLORREF bg, fg, behind; int radius, align, hasbg, spacing, lineh; } g_pills[64]; static int g_npills;
+static void swiss_pill_style(HWND w, COLORREF bg, int hasbg, COLORREF fg, COLORREF behind, int radius, int align, int spacing, int lineh) {
+  if (g_npills < 64) { g_pills[g_npills].w = w; g_pills[g_npills].bg = bg; g_pills[g_npills].hasbg = hasbg; g_pills[g_npills].fg = fg; g_pills[g_npills].behind = behind; g_pills[g_npills].radius = radius; g_pills[g_npills].align = align; g_pills[g_npills].spacing = spacing; g_pills[g_npills].lineh = lineh; g_npills++; }
 }
 static int swiss_is_pill(HWND w) { for (int i = 0; i < g_npills; i++) if (g_pills[i].w == w) return 1; return 0; }
+static void swiss_pill_metrics(HWND w, int* sp, int* lh) { for (int i = 0; i < g_npills; i++) if (g_pills[i].w == w) { *sp = g_pills[i].spacing; *lh = g_pills[i].lineh; return; } }
 static int swiss_pill_draw(LPDRAWITEMSTRUCT d) {
   if (d->CtlType != ODT_STATIC) return 0;
   int i = -1; for (int k = 0; k < g_npills; k++) if (g_pills[k].w == d->hwndItem) { i = k; break; }
   if (i < 0) return 0;
   HBRUSH bb = CreateSolidBrush(g_pills[i].behind); FillRect(d->hDC, &d->rcItem, bb); DeleteObject(bb);
-  swiss_fill_round(d->hDC, d->rcItem, g_pills[i].radius, C2A(g_pills[i].bg), 0, 0);
-  SetBkColor(d->hDC, g_pills[i].bg); SetBkMode(d->hDC, OPAQUE); SetTextColor(d->hDC, g_pills[i].fg);
+  if (g_pills[i].hasbg) { swiss_fill_round(d->hDC, d->rcItem, g_pills[i].radius, C2A(g_pills[i].bg), 0, 0); SetBkColor(d->hDC, g_pills[i].bg); SetBkMode(d->hDC, OPAQUE); }
+  else SetBkMode(d->hDC, TRANSPARENT);
+  SetTextColor(d->hDC, g_pills[i].fg);
+  if (g_pills[i].spacing) SetTextCharacterExtra(d->hDC, g_pills[i].spacing);   // letterSpacing
   HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0); HGDIOBJ of = f ? SelectObject(d->hDC, f) : NULL;
-  char buf[256]; GetWindowTextA(d->hwndItem, buf, sizeof buf);
+  char buf[512]; GetWindowTextA(d->hwndItem, buf, sizeof buf);
   UINT al = g_pills[i].align == 1 ? DT_CENTER : g_pills[i].align == 2 ? DT_RIGHT : DT_LEFT;
-  DrawTextA(d->hDC, buf, -1, &d->rcItem, al | DT_VCENTER | DT_SINGLELINE);
+  if (g_pills[i].lineh > 0) {   // custom line height: greedy word-wrap + hand-drawn lines
+    TEXTMETRICA tm; GetTextMetricsA(d->hDC, &tm);
+    int lh = tm.tmHeight * g_pills[i].lineh / 100;
+    int maxw = d->rcItem.right - d->rcItem.left; if (maxw < 1) maxw = 1;
+    int y = d->rcItem.top; char* p = buf;
+    while (*p) {
+      char* q = p; char* fit = NULL;        // longest prefix (word boundary) that fits maxw
+      for (;;) {
+        while (*q && *q != ' ' && *q != '\\n') q++;
+        SIZE s; GetTextExtentPoint32A(d->hDC, p, (int)(q - p), &s);
+        if (s.cx <= maxw || fit == NULL) { fit = q; if (*q == '\\n') { q++; break; } if (!*q) break; q++; }
+        else break;
+      }
+      int len = (int)(fit - p); while (len > 0 && (p[len - 1] == ' ' || p[len - 1] == '\\n')) len--;
+      TextOutA(d->hDC, d->rcItem.left, y, p, len); y += lh;
+      p = fit; while (*p == ' ' || *p == '\\n') p++;
+    }
+  } else {
+    DrawTextA(d->hDC, buf, -1, &d->rcItem, al | DT_VCENTER | DT_SINGLELINE);
+  }
+  if (g_pills[i].spacing) SetTextCharacterExtra(d->hDC, 0);
   if (of) SelectObject(d->hDC, of);
   return 1;
 }

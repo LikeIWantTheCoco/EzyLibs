@@ -116,6 +116,7 @@ function emit(ast, opts) {
       else if (k === 'textDecoration') o.textDecoration = s;
       else if (k === 'textTransform') o.textTransform = s;
       else if (k === 'letterSpacing') o.letterSpacing = num(s);
+      else if (k === 'lineHeight') o.lineHeight = Number(s);
       else if (k === 'color') o.color = s;
       else if (k === 'backgroundColor' || k === 'background') o.backgroundColor = s;
       else if (k === 'borderRadius') o.borderRadius = num(s);
@@ -221,6 +222,11 @@ function emit(ast, opts) {
     if (st && (st.width != null || st.fillCross || st.flex)) {
       out.build.push(`  gtk_label_set_line_wrap(GTK_LABEL(${target}), TRUE);`);
       out.build.push(`  gtk_label_set_line_wrap_mode(GTK_LABEL(${target}), PANGO_WRAP_WORD_CHAR);`);
+    }
+    // lineHeight (unitless factor): GTK has no CSS line-height, so apply it as a
+    // Pango line-height attribute (Pango 1.50+) — visible on multi-line text.
+    if (st && st.lineHeight && Number(st.lineHeight) > 0) {
+      out.build.push(`  { PangoAttrList* _al = pango_attr_list_new(); pango_attr_list_insert(_al, pango_attr_line_height_new(${Number(st.lineHeight)})); gtk_label_set_attributes(GTK_LABEL(${target}), _al); pango_attr_list_unref(_al); }`);
     }
   }
   // leaf controls (button/entry/…) are content-sized by default (web inline-
