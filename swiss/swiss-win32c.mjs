@@ -713,37 +713,6 @@ static void swiss_fill_round(HDC hdc, RECT rc, int r, ARGB fill, ARGB border, fl
   if (bw > 0) { GpPen* pen = NULL; GdipCreatePen1(border, bw, 2 /* UnitPixel */, &pen); if (pen) { GdipDrawPath(g, pen, p); GdipDeletePen(pen); } }
   GdipDeletePath(p); GdipDeleteGraphics(g);
 }
-// antialiased rounded fill with a vertical top→bottom gradient (button bevel)
-typedef struct { int X, Y, Width, Height; } GpRectI;
-GpStatus WINAPI GdipCreateLineBrushFromRectI(const GpRectI*, ARGB, ARGB, int, int, GpBrush**);
-static void swiss_fill_round_grad(HDC hdc, RECT rc, int r, ARGB top, ARGB bot, ARGB border, float bw) {
-  GpGraphics* g = NULL; if (GdipCreateFromHDC(hdc, &g) != 0 || !g) return;
-  GdipSetSmoothingMode(g, 4);
-  GpPath* p = NULL; GdipCreatePath(0, &p);
-  swiss_round_path(p, (float)rc.left + 0.5f, (float)rc.top + 0.5f, (float)(rc.right - rc.left) - 1, (float)(rc.bottom - rc.top) - 1, (float)r);
-  GpRectI gr = { rc.left, rc.top, rc.right - rc.left, (rc.bottom - rc.top) + 1 };
-  GpBrush* b = NULL; GdipCreateLineBrushFromRectI(&gr, top, bot, 1 /* vertical */, 0, &b);
-  if (b) { GdipFillPath(g, b, p); GdipDeleteBrush(b); }
-  if (bw > 0) { GpPen* pen = NULL; GdipCreatePen1(border, bw, 2, &pen); if (pen) { GdipDrawPath(g, pen, p); GdipDeletePen(pen); } }
-  GdipDeletePath(p); GdipDeleteGraphics(g);
-}
-// GTK-style button: very subtle top→bottom gradient + 1px border + a faint
-// lighter rim along the top inner edge (raised realism, matches GTK closely)
-static void swiss_fill_round_hl(HDC hdc, RECT rc, int r, ARGB top, ARGB bot, ARGB border, float bw, ARGB hl) {
-  GpGraphics* g = NULL; if (GdipCreateFromHDC(hdc, &g) != 0 || !g) return;
-  GdipSetSmoothingMode(g, 4);
-  GpPath* p = NULL; GdipCreatePath(0, &p);
-  swiss_round_path(p, (float)rc.left + 0.5f, (float)rc.top + 0.5f, (float)(rc.right - rc.left) - 1, (float)(rc.bottom - rc.top) - 1, (float)r);
-  GpRectI gr = { rc.left, rc.top, rc.right - rc.left, (rc.bottom - rc.top) + 1 };
-  GpBrush* b = NULL; GdipCreateLineBrushFromRectI(&gr, top, bot, 1 /* vertical */, 0, &b);
-  if (b) { GdipFillPath(g, b, p); GdipDeleteBrush(b); }
-  // top inner highlight line, inset by the corner radius
-  GpPen* hp = NULL; GdipCreatePen1(hl, 1.3f, 2, &hp);
-  if (hp) { GdipDrawLine(g, hp, (float)rc.left + r + 1, (float)rc.top + 1.6f, (float)rc.right - r - 1, (float)rc.top + 1.6f); GdipDeletePen(hp); }
-  if (bw > 0) { GpPen* pen = NULL; GdipCreatePen1(border, bw, 2, &pen); if (pen) { GdipDrawPath(g, pen, p); GdipDeletePen(pen); } }
-  GdipDeletePath(p); GdipDeleteGraphics(g);
-}
-
 // ── runtime layout node tree (stack/flex, recomputed on resize) ──
 typedef struct Node {
   HWND hwnd;                 // control window (NULL for a pure container)
@@ -985,8 +954,6 @@ static void swiss_btn_style(HWND w, COLORREF bg, int hasbg, COLORREF fg, int has
     g_btns[g_nbtns].fg = fg; g_btns[g_nbtns].hasfg = hasfg; g_btns[g_nbtns].radius = radius; g_btns[g_nbtns].behind = behind; g_nbtns++; }
 }
 static COLORREF swiss_darken(COLORREF c, int pct) { return RGB(GetRValue(c)*pct/100, GetGValue(c)*pct/100, GetBValue(c)*pct/100); }
-static int _clamp255(int v) { return v > 255 ? 255 : v; }
-static COLORREF swiss_lighten(COLORREF c, int pct) { return RGB(_clamp255(GetRValue(c)*pct/100), _clamp255(GetGValue(c)*pct/100), _clamp255(GetBValue(c)*pct/100)); }
 static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
   for (int i = 0; i < g_nbtns; i++) if (g_btns[i].w == d->hwndItem) {
     int plain = !g_btns[i].hasbg;
