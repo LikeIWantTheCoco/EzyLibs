@@ -809,7 +809,7 @@ ${out.updates.join('\n\n')}
 
 static void swiss_apply_css(void) {
   GtkCssProvider* p = gtk_css_provider_new();
-  gtk_css_provider_load_from_data(p, ${cstr('* { font-family: "Segoe UI", system-ui, "Cantarell", "Roboto", "DejaVu Sans", Arial, sans-serif; } ' + out.css.join(''))}, -1, NULL);
+  gtk_css_provider_load_from_data(p, ${cstr('* { font-family: "Segoe UI", system-ui, "Cantarell", "Roboto", "DejaVu Sans", Arial, sans-serif; font-size: 15px; } ' + out.css.join(''))}, -1, NULL);
   gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(p), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
   g_object_unref(p);
 }
