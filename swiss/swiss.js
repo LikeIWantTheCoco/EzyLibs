@@ -16,7 +16,7 @@ const renderer = makeRenderer(webHost);
 
 // shared default font across all targets (matches the win32 / gtk default);
 // the browser default is serif, so set a sans-serif stack on the root.
-const SWISS_FONT = "'Segoe UI', system-ui, -apple-system, Roboto, 'Helvetica Neue', Arial, sans-serif";
+const SWISS_FONT = "'Segoe UI', system-ui, 'Cantarell', 'Roboto', 'DejaVu Sans', Arial, sans-serif";
 
 // dark/light theme toggle — light is the default on every target. setTheme(dark)
 // flips the root colors (the native targets compile this to swiss_set_theme).

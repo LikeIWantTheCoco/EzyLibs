@@ -792,6 +792,7 @@ static void swiss_set_theme(long long dark) {
     "entry, button, combobox { border-radius:4px; min-height:0; transition:120ms; }"
     " entry { padding:4px 8px; border:1px solid #cccccc; }"
     " entry:focus { border-color:#0066cc; }"
+    " entry placeholder, entry text placeholder { color:#94a3b8; }"   // JSX/web-like gray placeholder (override the system theme's accent)
     " button:focus, entry:focus, combobox:focus { outline-color:#0066cc; outline-style:solid; outline-width:2px; }";
   char* css = g_strconcat(shape, dark
     ? " window { background-color:#1e1e1e; color:#e6e6e6; } entry, textview, text { background-color:#2a2a2a; color:#e6e6e6; } entry { border-color:#444; }"
@@ -808,7 +809,7 @@ ${out.updates.join('\n\n')}
 
 static void swiss_apply_css(void) {
   GtkCssProvider* p = gtk_css_provider_new();
-  gtk_css_provider_load_from_data(p, ${cstr('* { font-family: "Segoe UI", system-ui, "Cantarell", "DejaVu Sans", sans-serif; } ' + out.css.join(''))}, -1, NULL);
+  gtk_css_provider_load_from_data(p, ${cstr('* { font-family: "Segoe UI", system-ui, "Cantarell", "Roboto", "DejaVu Sans", Arial, sans-serif; } ' + out.css.join(''))}, -1, NULL);
   gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(p), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
   g_object_unref(p);
 }
