@@ -17,7 +17,9 @@
     "swiss-winsdk.mjs",
     "swiss-winshim.c",
     "swiss-native.ez",
-    "swiss-native.js"
+    "swiss-native.js",
+    "assets/fonts/DejaVuSans.ttf",
+    "assets/fonts/DejaVuSans-Bold.ttf"
   ],
   "cli":          "swiss",
   "tool_source":  "swiss.sh",

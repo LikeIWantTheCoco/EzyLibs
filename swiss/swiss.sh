@@ -305,6 +305,19 @@ build_backend() {
 }
 
 # detect the host OS → the default desktop target
+# optional font family from swiss.json ("font"): when set, every target uses it
+# as the primary family. Empty = per-OS native default (Segoe on Windows, etc.).
+read_font() {
+  [ -f swiss.json ] || return 0
+  node -e 'try{const f=require(process.cwd()+"/swiss.json").font;if(f)process.stdout.write(String(f))}catch(e){}' 2>/dev/null
+}
+# ship the bundled .ttf files next to a built binary (so a swiss.json "font" that
+# names a bundled family works even where it is not installed). $1 = dir.
+ship_fonts() {
+  [ -d "$LIB/assets/fonts" ] || return 0
+  mkdir -p "$1/fonts" && cp "$LIB"/assets/fonts/*.ttf "$1/fonts/" 2>/dev/null || true
+}
+
 host_os() {
   case "$(uname -s)" in
     Linux)               echo linux ;;
@@ -388,9 +401,16 @@ XML
 
   # 2) frontend: React/JSX → native Win32 C (build-time Node only)
   echo "swiss: translating React → Win32 C"
+  font=$(read_font)
   node src/swiss/swiss-sig.mjs backend/*.ez --out "$work/backend.sig.json"
-  node src/swiss/swiss-win32c.mjs src/App.jsx --out "$work/frontend.c" \
-    --title "$name" --sig "$work/backend.sig.json"
+  if [ -n "$font" ]; then
+    ship_fonts .; echo "swiss: font \"$font\" (bundled .ttf shipped next to the .exe)"
+    node src/swiss/swiss-win32c.mjs src/App.jsx --out "$work/frontend.c" \
+      --title "$name" --sig "$work/backend.sig.json" --font "$font"
+  else
+    node src/swiss/swiss-win32c.mjs src/App.jsx --out "$work/frontend.c" \
+      --title "$name" --sig "$work/backend.sig.json"
+  fi
 
   # 3) link one native .exe — system DLLs only, no GTK
   echo "swiss: linking native Win32 binary ($CC)"
@@ -448,9 +468,16 @@ build_desktop() {
 
   # 2) frontend: React/JSX → GTK C (the Swiss translator; build-time Node only)
   echo "swiss: translating React → GTK C"
+  font=$(read_font)
   node src/swiss/swiss-sig.mjs backend/*.ez --out "$work/backend.sig.json"
-  node src/swiss/swiss-gtkc.mjs src/App.jsx --out "$work/frontend.c" \
-    --title "$name" --sig "$work/backend.sig.json"
+  if [ -n "$font" ]; then
+    echo "swiss: font \"$font\" (primary family; DejaVu ships on most Linux)"
+    node src/swiss/swiss-gtkc.mjs src/App.jsx --out "$work/frontend.c" \
+      --title "$name" --sig "$work/backend.sig.json" --font "$font"
+  else
+    node src/swiss/swiss-gtkc.mjs src/App.jsx --out "$work/frontend.c" \
+      --title "$name" --sig "$work/backend.sig.json"
+  fi
 
   # 3) link one GTK binary with ezy's $target compiler. Windows: GTK is dynamic
   #    (DLLs), so drop ezy's -static, use -mwindows, and add the POSIX shim.
@@ -578,8 +605,13 @@ cmd_build() {
   case "$platform" in
     web) build_backend
          have npx || die "npx not found (install Node.js)"
+         font=$(read_font)
+         if [ -n "$font" ]; then
+           mkdir -p public/fonts && cp "$LIB"/assets/fonts/*.ttf public/fonts/ 2>/dev/null || true
+           echo "swiss: font \"$font\" (served from /fonts/, primary family)"
+         fi
          echo "swiss: building frontend (vite)"
-         npx vite build ;;
+         VITE_SWISS_FONT="$font" npx vite build ;;
     linux|windows|macos) build_desktop "$platform" ;;   # GTK frontend, OS backend
     gtk|desktop)
          die "use an OS target, not '$platform': --platform linux|windows|macos (GTK is implicit on desktop). No --platform = host OS." ;;
@@ -592,8 +624,10 @@ cmd_build() {
 cmd_dev() {
   build_backend
   have npx || die "npx not found (install Node.js)"
+  font=$(read_font)
+  [ -n "$font" ] && { mkdir -p public/fonts && cp "$LIB"/assets/fonts/*.ttf public/fonts/ 2>/dev/null || true; }
   echo "swiss: starting dev server"
-  npx vite
+  VITE_SWISS_FONT="$font" npx vite
 }
 
 # emit-app: produce a *source* copy of the project with everything lowered to C
@@ -668,9 +702,17 @@ cmd_emit_app() {
   # 2) frontend: React/JSX → native $gui C (build-time Node translator)
   echo "swiss: frontend JSX → $gui C  →  $out/src/App.c"
   sig="$out/.backend.sig.json"
+  font=$(read_font)
   node src/swiss/swiss-sig.mjs backend/*.ez --out "$sig" || die "swiss-sig failed"
-  node "src/swiss/swiss-${tr}.mjs" src/App.jsx --out "$out/src/App.c" \
-       --title "$name" --sig "$sig" || die "frontend translation failed"
+  if [ -n "$font" ]; then
+    [ "$platform" = windows ] && ship_fonts "$out"   # bundled .ttf next to the exe
+    echo "swiss: font \"$font\""
+    node "src/swiss/swiss-${tr}.mjs" src/App.jsx --out "$out/src/App.c" \
+         --title "$name" --sig "$sig" --font "$font" || die "frontend translation failed"
+  else
+    node "src/swiss/swiss-${tr}.mjs" src/App.jsx --out "$out/src/App.c" \
+         --title "$name" --sig "$sig" || die "frontend translation failed"
+  fi
   rm -f "$sig" "$out/src/App.jsx"
 
   # Win32 needs the POSIX shim + a themed/DPI manifest to compile; emit them too

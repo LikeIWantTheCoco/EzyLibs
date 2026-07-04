@@ -876,9 +876,19 @@ static void swiss_relayout(void) {
 // ── font cache (size 0 = default UI size) ──
 // face chosen at startup: DejaVu Sans if present (Linux/wine → matches the GTK
 // target) else Segoe UI (native Windows, what GTK would also use there)
-static const char* g_fontface = "Segoe UI";
+static const char* g_fontface = ${JSON.stringify(opts.font || 'Segoe UI')};
 static int CALLBACK swiss_fontprobe(const LOGFONTA* lf, const TEXTMETRICA* tm, DWORD ty, LPARAM lp) { (void)lf; (void)tm; (void)ty; *(int*)lp = 1; return 0; }
-static void swiss_pick_font(void) {
+${opts.font ? `static void swiss_pick_font(void) {
+  // a fixed font was requested in swiss.json ("font"): keep g_fontface as-is and
+  // register any bundled .ttf shipped next to the exe under fonts/ so the family
+  // is available even if it isn't installed on this machine.
+  char p[MAX_PATH]; DWORD n = GetModuleFileNameA(NULL, p, MAX_PATH);
+  if (n > 0 && n < MAX_PATH) { char* s = strrchr(p, '\\\\'); if (s) { s[1] = 0;
+    char f[MAX_PATH];
+    snprintf(f, sizeof f, "%sfonts\\\\DejaVuSans.ttf", p);      AddFontResourceExA(f, FR_PRIVATE, 0);
+    snprintf(f, sizeof f, "%sfonts\\\\DejaVuSans-Bold.ttf", p); AddFontResourceExA(f, FR_PRIVATE, 0);
+  } }
+}` : `static void swiss_pick_font(void) {
   // real Windows → Segoe UI (modern native). wine/Linux → DejaVu Sans if present
   // (matches the GTK target there). Detect wine via ntdll's wine_get_version.
   HMODULE nt = GetModuleHandleA("ntdll.dll");
@@ -892,7 +902,7 @@ static void swiss_pick_font(void) {
     if (found) g_fontface = "Segoe UI Variable Text";
   }
   ReleaseDC(NULL, dc);
-}
+}`}
 static struct { int px, bold; HFONT f; } g_fonts[64]; static int g_nfonts;
 static HFONT swiss_font(int px, int bold) {
   for (int i = 0; i < g_nfonts; i++) if (g_fonts[i].px == px && g_fonts[i].bold == bold) return g_fonts[i].f;
@@ -1258,11 +1268,12 @@ function main() {
   const input = args.find((a) => !a.startsWith('--'));
   const out = args.includes('--out') ? args[args.indexOf('--out') + 1] : 'frontend.c';
   const title = args.includes('--title') ? args[args.indexOf('--title') + 1] : 'Swiss';
+  const font = args.includes('--font') ? args[args.indexOf('--font') + 1] : '';
   let sigs = {};
   if (args.includes('--sig') && existsSync(args[args.indexOf('--sig') + 1])) sigs = JSON.parse(readFileSync(args[args.indexOf('--sig') + 1], 'utf8'));
-  if (!input) { console.error('usage: swiss-win32c <App.jsx> --out frontend.c [--title T] [--sig sig.json]'); process.exit(1); }
+  if (!input) { console.error('usage: swiss-win32c <App.jsx> --out frontend.c [--title T] [--sig sig.json] [--font "Family"]'); process.exit(1); }
   const ast = parse(readFileSync(input, 'utf8'), { sourceType: 'module', plugins: ['jsx'] });
-  writeFileSync(out, emit(ast, { title, sigs }));
+  writeFileSync(out, emit(ast, { title, sigs, font }));
   console.error(`swiss-win32c: ${input} → ${out}`);
 }
 main();

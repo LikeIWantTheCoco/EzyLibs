@@ -817,7 +817,7 @@ ${out.updates.join('\n\n')}
 
 static void swiss_apply_css(void) {
   GtkCssProvider* p = gtk_css_provider_new();
-  gtk_css_provider_load_from_data(p, ${cstr('* { font-family: "Segoe UI", system-ui, "Cantarell", "Roboto", "DejaVu Sans", Arial, sans-serif; font-size: 15px; } ' + out.css.join(''))}, -1, NULL);
+  gtk_css_provider_load_from_data(p, ${cstr('* { font-family: ' + (opts.font ? `"${opts.font}", ` : '') + '"Segoe UI", system-ui, "Cantarell", "Roboto", "DejaVu Sans", Arial, sans-serif; font-size: 15px; } ' + out.css.join(''))}, -1, NULL);
   gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(p), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
   g_object_unref(p);
 }
@@ -861,11 +861,12 @@ function main() {
   const input = args.find((a) => !a.startsWith('--'));
   const out = args.includes('--out') ? args[args.indexOf('--out') + 1] : 'frontend.c';
   const title = args.includes('--title') ? args[args.indexOf('--title') + 1] : 'Swiss';
+  const font = args.includes('--font') ? args[args.indexOf('--font') + 1] : '';
   let sigs = {};
   if (args.includes('--sig') && existsSync(args[args.indexOf('--sig') + 1])) sigs = JSON.parse(readFileSync(args[args.indexOf('--sig') + 1], 'utf8'));
-  if (!input) { console.error('usage: swiss-gtkc <App.jsx> --out frontend.c [--title T] [--sig sig.json]'); process.exit(1); }
+  if (!input) { console.error('usage: swiss-gtkc <App.jsx> --out frontend.c [--title T] [--sig sig.json] [--font "Family"]'); process.exit(1); }
   const ast = parse(readFileSync(input, 'utf8'), { sourceType: 'module', plugins: ['jsx'] });
-  writeFileSync(out, emit(ast, { title, sigs }));
+  writeFileSync(out, emit(ast, { title, sigs, font }));
   console.error(`swiss-gtkc: ${input} → ${out}`);
 }
 main();

@@ -18,6 +18,26 @@ const renderer = makeRenderer(webHost);
 // the browser default is serif, so set a sans-serif stack on the root.
 const SWISS_FONT = "'Segoe UI', system-ui, 'Cantarell', 'Roboto', 'DejaVu Sans', Arial, sans-serif";
 
+// optional swiss.json "font": the web build passes it as VITE_SWISS_FONT; an app
+// can also set globalThis.SWISS_FONT. When set it becomes the primary family so
+// web matches the native targets. The bundled DejaVu is registered via @font-face
+// (served from /fonts/) so a "DejaVu Sans" choice works in the browser too.
+const FONT_OVERRIDE =
+  (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SWISS_FONT) ||
+  (typeof globalThis !== 'undefined' && globalThis.SWISS_FONT) || '';
+const FONT_STACK = FONT_OVERRIDE ? `'${FONT_OVERRIDE}', ${SWISS_FONT}` : SWISS_FONT;
+
+let fontFaceInjected = false;
+function injectFontFace() {
+  if (fontFaceInjected || typeof document === 'undefined') return;
+  fontFaceInjected = true;
+  const s = document.createElement('style');
+  s.textContent =
+    "@font-face{font-family:'DejaVu Sans';font-weight:400;font-display:swap;src:url('/fonts/DejaVuSans.ttf') format('truetype')}" +
+    "@font-face{font-family:'DejaVu Sans';font-weight:700;font-display:swap;src:url('/fonts/DejaVuSans-Bold.ttf') format('truetype')}";
+  document.head.appendChild(s);
+}
+
 // dark/light theme toggle — light is the default on every target. setTheme(dark)
 // flips the root colors (the native targets compile this to swiss_set_theme).
 export function setTheme(dark) {
@@ -28,7 +48,8 @@ export function setTheme(dark) {
 }
 
 export function render(element, container, opts) {
-  if (container) { container.style.fontFamily = SWISS_FONT; container.style.fontSize = '15px'; container.style.lineHeight = '1.5'; }
+  injectFontFace();
+  if (container) { container.style.fontFamily = FONT_STACK; container.style.fontSize = '15px'; container.style.lineHeight = '1.5'; }
   setTheme(false);   // light default
   if (opts && opts.backend) {
     connectEzy(opts.backend, opts.sigs || {}).then((impl) => {
