@@ -615,10 +615,10 @@ cmd_emit_app() {
   have ezy  || die "ezy not found on PATH"
   have node || die "node not found (the translators run on Node)"
   case "$platform" in
-    windows)     tr=win32c; gui="Win32" ;;
-    linux|macos) tr=gtkc;   gui="GTK" ;;
-    web)  die "emit-app targets native C (linux|windows|macos); the web target stays JSX (no C is generated)" ;;
-    *)    die "emit-app: unknown platform '$platform' (use linux|windows|macos)" ;;
+    windows)     tr=win32c; gui="Win32"; mode=native ;;
+    linux|macos) tr=gtkc;   gui="GTK";   mode=native ;;
+    web)         gui="web";              mode=web ;;
+    *)    die "emit-app: unknown platform '$platform' (use linux|windows|macos|web)" ;;
   esac
 
   # keep the project's runtime/translators in sync with the installed lib first
@@ -627,12 +627,38 @@ cmd_emit_app() {
   name=$(basename "$PWD")
   [ -n "$out" ] || out="${name}-emit-${platform}"
 
-  echo "swiss: emitting C source copy → $out/  (platform: $platform, $gui frontend)"
+  echo "swiss: emitting $gui source copy → $out/  (platform: $platform)"
   rm -rf "$out"; mkdir -p "$out"
   # mirror the project tree, minus build junk / the out dir / the translators
   tar --exclude=./.swiss --exclude=./node_modules --exclude=./dist --exclude=./.git \
-      --exclude='./*-emit-*' --exclude="./$name" --exclude="./$name.exe" \
+      --exclude='./*-emit-*' --exclude="./$out" --exclude="./$name" --exclude="./$name.exe" \
       --exclude='*.o' --exclude='./src/swiss/*.mjs' -cf - . | ( cd "$out" && tar -xf - )
+
+  # web: JSX stays JSX (no C). The copy already carries the swiss widget sources
+  # under src/swiss/, and `from 'swiss'` resolves to them (vite alias). To *see*
+  # the resulting code with the widgets inlined (App + View/Text/Button/… in one
+  # place, React kept external), also emit a single readable esbuild bundle.
+  if [ "$mode" = web ]; then
+    # bundle App.jsx (not main.jsx) — App imports the widgets + react, but not the
+    # wasm backend, so the bundle is exactly your component + the resolved widgets.
+    entry=src/App.jsx; [ -f "$entry" ] || entry=$(ls src/*.jsx 2>/dev/null | grep -v main | head -1)
+    if [ -n "$entry" ] && npx --no-install esbuild --version >/dev/null 2>&1; then
+      echo "swiss: bundling $entry → $out/App.web.js  (widgets inlined, readable)"
+      npx --no-install esbuild "$entry" --bundle --format=esm --jsx=automatic \
+        --loader:.js=jsx \
+        --alias:swiss=./src/swiss/swiss.js --alias:swiss/bridge=./src/swiss/swiss-bridge.js \
+        --external:react --external:react-dom --external:react-dom/client --external:react/jsx-runtime --external:react-reconciler \
+        --outfile="$out/App.web.js" \
+        && echo "swiss: → $out/App.web.js  (App + swiss widgets resolved into one file)" \
+        || echo "swiss: esbuild bundle skipped — widget sources are under $out/src/swiss/"
+    else
+      echo "swiss: esbuild not available — widget sources are readable under $out/src/swiss/"
+    fi
+    echo "swiss: done — web sources emitted (JSX + inlined widget code)."
+    echo "       widgets: $out/src/swiss/*.js   (View/Text/Button/Input, reconciler, host)"
+    echo "       preview: (cd $out && npx vite)"
+    return
+  fi
 
   # 1) backend: Ezy → C (recycle `ezy emit-c`); replace the .ez sources with it
   echo "swiss: backend  Ezy → C   →  $out/backend/main.c"
@@ -722,6 +748,7 @@ case "$1" in
     echo "  swiss build --platform web       web build (React DOM + wasm) → dist/"
     echo "  swiss package [--platform OS]    build + bundle a distributable (deps included)"
     echo "  swiss emit-app [--platform OS]   copy the project with JSX+Ezy lowered to C (not linked)"
+    echo "  swiss emit-app --platform web    copy + readable bundle with the swiss widgets inlined"
     echo "  (GTK is implicit on desktop; the OS picks the backend compile target)"
     exit 1 ;;
 esac

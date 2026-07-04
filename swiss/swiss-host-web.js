@@ -22,6 +22,18 @@ function applyDefaults(type, el) {
   if (type === 'swiss-view') {
     el.style.display = 'flex';
     el.style.flexDirection = 'column';
+  } else if (type === 'swiss-button') {
+    // strip the native <button> chrome (the ugly gray/black border + OS bevel)
+    // so buttons are flat like the native targets; the JSX style still overrides.
+    el.style.appearance = 'none';
+    el.style.webkitAppearance = 'none';
+    el.style.border = 'none';
+    el.style.background = 'transparent';
+    el.style.font = 'inherit';
+    el.style.color = 'inherit';
+    el.style.cursor = 'pointer';
+    el.style.padding = '0';
+    el.style.outline = 'none';   // no black focus box; JSX/focus styling can re-add
   }
 }
 
