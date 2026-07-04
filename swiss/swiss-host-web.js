@@ -19,6 +19,10 @@ const TAG = {
 
 // default layout per primitive (matches RN/Yoga: View is a flex column)
 function applyDefaults(type, el) {
+  // RN/Yoga box model: width/height include padding+border (the native targets
+  // lay out this way too). Browsers default to content-box, so force border-box
+  // on every widget to keep web sizing identical to native/JSX.
+  el.style.boxSizing = 'border-box';
   if (type === 'swiss-view') {
     el.style.display = 'flex';
     el.style.flexDirection = 'column';

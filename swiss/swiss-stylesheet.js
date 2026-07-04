@@ -10,16 +10,14 @@ export const StyleSheet = {
   flatten: (s) => (Array.isArray(s) ? Object.assign({}, ...s.filter(Boolean)) : s || {}),
 };
 
-// numeric values for these CSS props get "px" appended on web.
-const PX = new Set([
-  'padding', 'paddingTop', 'paddingBottom', 'paddingLeft', 'paddingRight',
-  'paddingHorizontal', 'paddingVertical',
-  'margin', 'marginTop', 'marginBottom', 'marginLeft', 'marginRight',
-  'marginHorizontal', 'marginVertical',
-  'width', 'height', 'minWidth', 'minHeight', 'maxWidth', 'maxHeight',
-  'top', 'bottom', 'left', 'right', 'gap',
-  'fontSize', 'borderWidth', 'borderRadius',
-  'borderTopWidth', 'borderBottomWidth', 'borderLeftWidth', 'borderRightWidth',
+// CSS props that take a raw (unitless) number — everything else numeric gets
+// "px" appended, exactly like React DOM. This makes any numeric style value
+// behave the JSX way instead of only a hand-picked whitelist.
+const UNITLESS = new Set([
+  'flex', 'flexGrow', 'flexShrink', 'order', 'zIndex', 'opacity', 'fontWeight',
+  'lineHeight', 'zoom', 'columnCount', 'fillOpacity', 'strokeOpacity',
+  'strokeWidth', 'aspectRatio', 'gridColumn', 'gridRow', 'gridColumnStart',
+  'gridColumnEnd', 'gridRowStart', 'gridRowEnd', 'tabSize', 'widows', 'orphans',
 ]);
 
 // RN shorthands that expand to two CSS props.
@@ -31,7 +29,7 @@ const EXPAND = {
 };
 
 function put(out, key, val) {
-  if (typeof val === 'number' && PX.has(key)) out[key] = val + 'px';
+  if (typeof val === 'number' && !UNITLESS.has(key)) out[key] = val + 'px';
   else out[key] = val;
 }
 
