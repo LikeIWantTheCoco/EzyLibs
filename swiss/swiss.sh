@@ -596,11 +596,119 @@ cmd_dev() {
   npx vite
 }
 
+# emit-app: produce a *source* copy of the project with everything lowered to C
+# but NOT linked — the React/JSX frontend translated to the platform's native C
+# (GTK or Win32) and the Ezy backend run through `ezy emit-c`. Same directory
+# structure as the original, with .jsx/.ez replaced by the emitted .c. Stops
+# before the compiler, so you get the app "compiled to C, not to a binary".
+cmd_emit_app() {
+  platform=$(host_os); out=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      app)        shift ;;                    # allow "swiss emit app ..."
+      --platform) platform="$2"; shift 2 ;;
+      --out)      out="$2"; shift 2 ;;
+      *)          shift ;;
+    esac
+  done
+  [ -f swiss.json ] || die "no swiss.json — run inside a Swiss project"
+  have ezy  || die "ezy not found on PATH"
+  have node || die "node not found (the translators run on Node)"
+  case "$platform" in
+    windows)     tr=win32c; gui="Win32" ;;
+    linux|macos) tr=gtkc;   gui="GTK" ;;
+    web)  die "emit-app targets native C (linux|windows|macos); the web target stays JSX (no C is generated)" ;;
+    *)    die "emit-app: unknown platform '$platform' (use linux|windows|macos)" ;;
+  esac
+
+  # keep the project's runtime/translators in sync with the installed lib first
+  [ -d "$LIB" ] && copy_runtime src/swiss
+
+  name=$(basename "$PWD")
+  [ -n "$out" ] || out="${name}-emit-${platform}"
+
+  echo "swiss: emitting C source copy → $out/  (platform: $platform, $gui frontend)"
+  rm -rf "$out"; mkdir -p "$out"
+  # mirror the project tree, minus build junk / the out dir / the translators
+  tar --exclude=./.swiss --exclude=./node_modules --exclude=./dist --exclude=./.git \
+      --exclude='./*-emit-*' --exclude="./$name" --exclude="./$name.exe" \
+      --exclude='*.o' --exclude='./src/swiss/*.mjs' -cf - . | ( cd "$out" && tar -xf - )
+
+  # 1) backend: Ezy → C (recycle `ezy emit-c`); replace the .ez sources with it
+  echo "swiss: backend  Ezy → C   →  $out/backend/main.c"
+  ezy emit-c backend/main.ez > "$out/backend/main.c" || die "ezy emit-c failed"
+  rm -f "$out"/backend/*.ez
+
+  # 2) frontend: React/JSX → native $gui C (build-time Node translator)
+  echo "swiss: frontend JSX → $gui C  →  $out/src/App.c"
+  sig="$out/.backend.sig.json"
+  node src/swiss/swiss-sig.mjs backend/*.ez --out "$sig" || die "swiss-sig failed"
+  node "src/swiss/swiss-${tr}.mjs" src/App.jsx --out "$out/src/App.c" \
+       --title "$name" --sig "$sig" || die "frontend translation failed"
+  rm -f "$sig" "$out/src/App.jsx"
+
+  # Win32 needs the POSIX shim + a themed/DPI manifest to compile; emit them too
+  if [ "$platform" = windows ]; then
+    mkdir -p "$out/src/swiss"
+    cp src/swiss/swiss-winshim.c "$out/src/swiss/" 2>/dev/null || true
+    cat > "$out/app.manifest" <<'XML'
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency><dependentAssembly><assemblyIdentity
+    type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0"
+    processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
+  </dependentAssembly></dependency>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
+    </windowsSettings>
+  </application>
+</assembly>
+XML
+    printf '1 24 "app.manifest"\n' > "$out/app.rc"
+  fi
+
+  # 3) a build recipe to finish the last (linking) step by hand — we stop here
+  if [ "$platform" = windows ]; then
+    cat > "$out/build.sh" <<EOF
+#!/bin/sh
+# finish the Win32 build: compile the emitted C (no Swiss/Node needed).
+set -e
+CC=\${CC:-x86_64-w64-mingw32-gcc}
+WINDRES=\${WINDRES:-x86_64-w64-mingw32-windres}
+"\$WINDRES" app.rc -o manifest.o
+"\$CC" src/App.c backend/main.c src/swiss/swiss-winshim.c manifest.o -o "$name.exe" \\
+  -mwindows -static \\
+  -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshell32 -lole32 -lgdiplus -luxtheme -lwinpthread -lm
+echo "built ./$name.exe"
+EOF
+  else
+    cat > "$out/build.sh" <<EOF
+#!/bin/sh
+# finish the GTK build: compile the emitted C (no Swiss/Node needed).
+set -e
+CC=\${CC:-cc}
+"\$CC" src/App.c backend/main.c \$(pkg-config --cflags --libs gtk+-3.0) -lm -o "$name"
+echo "built ./$name"
+# note: if the backend imports native EzyLibs (e.g. sqlite), add their -l/-L flags.
+EOF
+  fi
+  chmod +x "$out/build.sh"
+
+  echo "swiss: done — C sources emitted, not linked."
+  echo "       backend:  $out/backend/main.c   (ezy emit-c)"
+  echo "       frontend: $out/src/App.c        ($gui)"
+  echo "       compile:  (cd $out && ./build.sh)"
+}
+
 case "$1" in
   new)     scaffold "$2" ;;
-  build)   shift; cmd_build "$@" ;;
-  package) shift; cmd_package "$@" ;;
-  dev)     cmd_dev ;;
+  build)    shift; cmd_build "$@" ;;
+  package)  shift; cmd_package "$@" ;;
+  emit-app) shift; cmd_emit_app "$@" ;;
+  emit)     shift; cmd_emit_app "$@" ;;   # `swiss emit app [--platform ...]`
+  dev)      cmd_dev ;;
   perms)   gen_permissions; cat .swiss/permissions/android-manifest.xml 2>/dev/null ;;
   *)
     echo "swiss — one React frontend + Ezy backend, many targets"
@@ -613,6 +721,7 @@ case "$1" in
     echo "  swiss build --platform macos     desktop GTK app (macOS)"
     echo "  swiss build --platform web       web build (React DOM + wasm) → dist/"
     echo "  swiss package [--platform OS]    build + bundle a distributable (deps included)"
+    echo "  swiss emit-app [--platform OS]   copy the project with JSX+Ezy lowered to C (not linked)"
     echo "  (GTK is implicit on desktop; the OS picks the backend compile target)"
     exit 1 ;;
 esac
