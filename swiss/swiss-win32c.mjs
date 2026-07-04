@@ -84,6 +84,11 @@ function emit(ast, opts) {
       else if (k === 'color') o.color = s;
       else if (k === 'backgroundColor' || k === 'background') o.backgroundColor = s;
       else if (k === 'borderRadius') o.borderRadius = num(s);
+      else if (k === 'border') { if (s !== 'none') { const m = s.match(/(\d+)px\s+\w+\s+(\S+)/); if (m) { o.borderWidth = parseInt(m[1]); o.borderColor = m[2]; } } }
+      else if (k === 'borderColor') o.borderColor = s;
+      else if (k === 'borderWidth') o.borderWidth = num(s);
+      else if (k === 'opacity') o.opacity = parseFloat(s);
+      else if (k === 'overflow' || k === 'overflowY') o.overflow = s;
       else if (k === 'boxShadow') o.boxShadow = s;
       else if (k === 'textAlign') o.textAlign = s;
       else if (k === 'flexDirection') o.flexDirection = s;
@@ -158,7 +163,18 @@ function emit(ast, opts) {
     const fillcross = st && (st.fillCross || (st.flex || st.flexGrow)) ? 1 : 0;  // width:100% / flex → fill parent cross-axis
     const radius = st && st.borderRadius ? Number(st.borderRadius) : 0;
     const shadow = st && st.boxShadow && st.boxShadow !== 'none' ? 1 : 0;
-    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross, radius, shadow };
+    // border: honor the `border: '1px solid #ccc'` shorthand (from StyleSheet refs,
+    // which arrive raw) as well as explicit borderWidth/borderColor.
+    let _bc = st && st.borderColor, _bw = st && st.borderWidth;
+    if (st && st.border && st.border !== 'none' && _bc == null) {
+      const mm = String(st.border).match(/(\d+)px\s+\w+\s+(\S+)/);
+      if (mm) { _bw = _bw != null ? _bw : parseInt(mm[1]); _bc = mm[2]; }
+    }
+    const borderw = _bw != null ? Number(_bw) : (_bc != null ? 1 : 0);
+    const bordercol = _bc != null ? colorref(_bc) : null;
+    const opacity = st && st.opacity != null && st.opacity < 1 ? Math.max(0, st.opacity) : 1;
+    const overflow = st && (st.overflow === 'auto' || st.overflow === 'scroll') ? 1 : 0;
+    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross, radius, shadow, borderw, bordercol, opacity, overflow };
   }
   // apply font + text color to a freshly created control hwnd expr
   function applyControl(hw, st, kind, scope) {
@@ -234,6 +250,9 @@ function emit(ast, opts) {
       if (na.fillcross) out.build.push(`  ${nv}->fillcross = 1;`);
       if (na.radius) out.build.push(`  ${nv}->radius = SC(${na.radius});`);
       if (na.shadow) out.build.push(`  ${nv}->shadow = 1;`);
+      if (na.bordercol != null) out.build.push(`  ${nv}->hasborder = 1; ${nv}->bordercol = ${na.bordercol}; ${nv}->borderw = SC(${na.borderw || 1});`);
+      if (na.opacity < 1) out.build.push(`  ${nv}->alpha = ${Math.round(na.opacity * 255)};`);
+      if (na.overflow) out.build.push(`  ${nv}->overflow = 1;`);
       if (na.mt || na.mb || na.ml || na.mr) out.build.push(`  ${nv}->mt = SC(${na.mt}); ${nv}->mb = SC(${na.mb}); ${nv}->ml = SC(${na.ml}); ${nv}->mr = SC(${na.mr});`);
     };
     // control height: explicit height wins; else derive from vertical padding +
@@ -727,6 +746,9 @@ typedef struct Node {
   int rx, ry, rw, rh;        // last laid-out rect (for background painting)
   int frame; COLORREF framecol;   // draw a soft rounded border around this control (inputs)
   int shadow;                // boxShadow → a soft drop shadow behind the panel
+  int borderw; COLORREF bordercol; int hasborder;   // CSS border on a View (width/color)
+  int alpha;                 // opacity → 0..255 alpha for the painted background (255 = opaque)
+  int overflow, scrolly, contenth;   // overflow:auto/scroll → vertical scroll offset + content height
   COLORREF bg; int hasbg, visible;
 } Node;
 
@@ -938,11 +960,17 @@ static void swiss_shadow(HDC hdc, RECT r, int radius) {
   }
 }
 static void swiss_paint_bg(Node* n, HDC hdc) {
-  if (n->hasbg) {
+  if (n->hasbg || n->hasborder) {
     RECT r = { n->rx, n->ry, n->rx + n->rw, n->ry + n->rh };
     if (n->shadow) swiss_shadow(hdc, r, n->radius);            // drop shadow behind the panel
-    if (n->radius > 0) swiss_fill_round(hdc, r, n->radius, C2A(n->bg), 0, 0);   // rounded card (AA)
-    else { HBRUSH b = CreateSolidBrush(n->bg); FillRect(hdc, &r, b); DeleteObject(b); }
+    int a = n->alpha ? n->alpha : 255;                          // opacity (0 = unset = opaque)
+    if (n->hasbg && n->radius == 0 && a == 255 && !n->hasborder) {
+      HBRUSH b = CreateSolidBrush(n->bg); FillRect(hdc, &r, b); DeleteObject(b);   // fast opaque path
+    } else {
+      ARGB fill = n->hasbg ? (((ARGB)a << 24) | (C2A(n->bg) & 0xFFFFFFu)) : 0;      // alpha 0 = no fill (border only)
+      ARGB bord = n->hasborder ? (((ARGB)a << 24) | (C2A(n->bordercol) & 0xFFFFFFu)) : 0;
+      swiss_fill_round(hdc, r, n->radius, fill, bord, n->hasborder ? (float)n->borderw : 0.0f);
+    }
   }
   for (int i = 0; i < n->nkids; i++) if (n->kids[i]->visible) swiss_paint_bg(n->kids[i], hdc);
 }

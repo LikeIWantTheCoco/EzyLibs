@@ -74,6 +74,7 @@ function emit(ast, opts) {
       else if (k === 'backgroundColor') css.push(`background-color:${v};background-image:none`);
       else if (k === 'borderWidth') css.push(`border-width:${v}px;border-style:solid`);
       else if (k === 'borderColor') css.push(`border-color:${v}`);
+      else if (k === 'border') { if (v !== 'none') { const m = String(v).match(/(\d+)px\s+(\w+)\s+(\S+)/); if (m) css.push(`border-width:${m[1]}px;border-style:${m[2]};border-color:${m[3]}`); } }
       else if (k === 'borderRadius') css.push(`border-radius:${v}px`);
       else if (k === 'boxShadow') css.push(`box-shadow:0 2px 8px rgba(0,0,0,0.18)`);
       else if (k === 'textAlign') css.push(`text-align:${v}`);
