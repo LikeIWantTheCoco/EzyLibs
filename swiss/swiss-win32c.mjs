@@ -958,8 +958,8 @@ static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
   for (int i = 0; i < g_nbtns; i++) if (g_btns[i].w == d->hwndItem) {
     int plain = !g_btns[i].hasbg;
     COLORREF bg = plain ? RGB(245, 246, 248) : g_btns[i].bg;   // light surface for plain buttons
-    if (d->itemState & ODS_SELECTED) bg = swiss_darken(bg, plain ? 94 : 85);   // pressed
-    else if (d->itemState & ODS_HOTLIGHT) bg = swiss_darken(bg, plain ? 97 : 92); // hover
+    // flat like JSX/web: the button color is static (no hover/press shading — the
+    // JSX styles declare no :hover, so the fill stays constant like the DOM)
     // paint the panel color behind first (no window region — GDI+ AA rounds it)
     HBRUSH bb = CreateSolidBrush(g_btns[i].behind); FillRect(d->hDC, &d->rcItem, bb); DeleteObject(bb);
     int r = g_btns[i].radius;

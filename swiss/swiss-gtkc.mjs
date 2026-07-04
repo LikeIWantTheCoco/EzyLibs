@@ -790,6 +790,8 @@ static void swiss_set_theme(long long dark) {
   // in both themes
   const char* shape =
     "entry, button, combobox { border-radius:4px; min-height:0; transition:120ms; }"
+    " button { border:none; box-shadow:none; background-image:none; text-shadow:none; }"   // flat like JSX/web (drop the theme's border/bevel)
+    " button:hover, button:active { background-image:none; }"                               // no hover/press shading (JSX declares no :hover)
     " entry { padding:4px 8px; border:1px solid #cccccc; }"
     " entry:focus { border-color:#0066cc; }"
     " entry placeholder, entry text placeholder { color:#94a3b8; }"   // JSX/web-like gray placeholder (override the system theme's accent)
