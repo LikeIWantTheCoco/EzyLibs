@@ -80,6 +80,9 @@ function emit(ast, opts) {
       else if (k === 'textAlign') css.push(`text-align:${v}`);
       else if (k === 'fontFamily') css.push(`font-family:${v}`);
       else if (k === 'opacity') css.push(`opacity:${v}`);
+      else if (k === 'fontStyle') css.push(`font-style:${v}`);                                   // italic
+      else if (k === 'textDecoration') { if (v !== 'none') css.push(`text-decoration-line:${v}`); }  // underline / line-through
+      else if (k === 'letterSpacing') css.push(`letter-spacing:${typeof v === 'number' ? v + 'px' : v}`);
     }
     if (!css.length) return null;
     if (!cssClasses[key]) { const cl = `swiss-${cssN++}`; cssClasses[key] = cl; out.css.push(`.${cl}{${css.join(';')}}`); }
@@ -109,6 +112,10 @@ function emit(ast, opts) {
       else if (k === 'flex' || k === 'flexGrow') o.flex = num(s);
       else if (k === 'fontSize') o.fontSize = num(s);
       else if (k === 'fontWeight') o.fontWeight = s;
+      else if (k === 'fontStyle') o.fontStyle = s;
+      else if (k === 'textDecoration') o.textDecoration = s;
+      else if (k === 'textTransform') o.textTransform = s;
+      else if (k === 'letterSpacing') o.letterSpacing = num(s);
       else if (k === 'color') o.color = s;
       else if (k === 'backgroundColor' || k === 'background') o.backgroundColor = s;
       else if (k === 'borderRadius') o.borderRadius = num(s);
@@ -338,7 +345,8 @@ function emit(ast, opts) {
         applyStyle(`s->${f}`, st); labelAlign(`s->${f}`, st); addClass(`s->${f}`); pack(`s->${f}`); return `s->${f}`;
       }
       const l = vid('t');
-      out.build.push(`  GtkWidget* ${l} = gtk_label_new(${cstr(info.staticText)});`);
+      const stx = st && st.textTransform === 'uppercase' ? info.staticText.toUpperCase() : st && st.textTransform === 'lowercase' ? info.staticText.toLowerCase() : info.staticText;
+      out.build.push(`  GtkWidget* ${l} = gtk_label_new(${cstr(stx)});`);
       applyStyle(l, st); labelAlign(l, st); addClass(l); pack(l); return l;
     }
     if (name === 'Button') {

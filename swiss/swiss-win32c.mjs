@@ -81,6 +81,10 @@ function emit(ast, opts) {
       else if (k === 'flex' || k === 'flexGrow') o.flex = num(s);
       else if (k === 'fontSize') o.fontSize = num(s);
       else if (k === 'fontWeight') o.fontWeight = s;
+      else if (k === 'fontStyle') o.fontStyle = s;
+      else if (k === 'textDecoration') o.textDecoration = s;
+      else if (k === 'textTransform') o.textTransform = s;
+      else if (k === 'letterSpacing') o.letterSpacing = num(s);
       else if (k === 'color') o.color = s;
       else if (k === 'backgroundColor' || k === 'background') o.backgroundColor = s;
       else if (k === 'borderRadius') o.borderRadius = num(s);
@@ -183,7 +187,10 @@ function emit(ast, opts) {
     // system GUI font.
     const sz = st && st.fontSize ? Number(st.fontSize) : 0;
     const bold = st && (st.fontWeight === 'bold' || Number(st.fontWeight) >= 600) ? 1 : 0;
-    out.build.push(`  SendMessageA(${hw}, WM_SETFONT, (WPARAM)swiss_font(${sz}, ${bold}), TRUE);`);
+    const ital = st && st.fontStyle === 'italic' ? 1 : 0;
+    const und = st && st.textDecoration && /underline/.test(st.textDecoration) ? 1 : 0;
+    const strk = st && st.textDecoration && /line-through/.test(st.textDecoration) ? 1 : 0;
+    out.build.push(`  SendMessageA(${hw}, WM_SETFONT, (WPARAM)swiss_font5(${sz}, ${bold}, ${ital}, ${und}, ${strk}), TRUE);`);
     // text color — static, or chosen at runtime for a `cond ? a : b` style
     let col = st && colorref(st.color);
     const cnd = st && st.__cond;
@@ -309,7 +316,8 @@ function emit(ast, opts) {
         applyControl(`s->${f}`, st, 'text', scope); regPill(`s->${f}`);
         const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(`s->${f}`)};`); selfStep(n); pack(n); return n;
       }
-      const hw = ctl('"STATIC"', sstyle, cstr(info.staticText), 'text');
+      const stx = st && st.textTransform === 'uppercase' ? info.staticText.toUpperCase() : st && st.textTransform === 'lowercase' ? info.staticText.toLowerCase() : info.staticText;
+      const hw = ctl('"STATIC"', sstyle, cstr(stx), 'text');
       applyControl(hw, st, 'text', scope); regPill(hw);
       const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(hw)};`); selfStep(n); pack(n); return n;
     }
@@ -958,15 +966,17 @@ ${opts.font ? `static void swiss_pick_font(void) {
   }
   ReleaseDC(NULL, dc);
 }`}
-static struct { int px, bold; HFONT f; } g_fonts[64]; static int g_nfonts;
-static HFONT swiss_font(int px, int bold) {
-  for (int i = 0; i < g_nfonts; i++) if (g_fonts[i].px == px && g_fonts[i].bold == bold) return g_fonts[i].f;
+static struct { int px, bold, ital, und, strk; HFONT f; } g_fonts[128]; static int g_nfonts;
+static HFONT swiss_font5(int px, int bold, int ital, int und, int strk) {
+  for (int i = 0; i < g_nfonts; i++)
+    if (g_fonts[i].px == px && g_fonts[i].bold == bold && g_fonts[i].ital == ital && g_fonts[i].und == und && g_fonts[i].strk == strk) return g_fonts[i].f;
   int h = px ? -MulDiv(SC(px), 96, 72) : -SC(15);   // scale font for HiDPI
-  HFONT f = CreateFontA(h, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+  HFONT f = CreateFontA(h, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, ital, und, strk, DEFAULT_CHARSET,
     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, g_fontface);
-  if (g_nfonts < 64) { g_fonts[g_nfonts].px = px; g_fonts[g_nfonts].bold = bold; g_fonts[g_nfonts].f = f; g_nfonts++; }
+  if (g_nfonts < 128) { g_fonts[g_nfonts].px = px; g_fonts[g_nfonts].bold = bold; g_fonts[g_nfonts].ital = ital; g_fonts[g_nfonts].und = und; g_fonts[g_nfonts].strk = strk; g_fonts[g_nfonts].f = f; g_nfonts++; }
   return f;
 }
+static HFONT swiss_font(int px, int bold) { return swiss_font5(px, bold, 0, 0, 0); }
 
 // ── per-control text color (applied via WM_CTLCOLORSTATIC) ──
 static struct { HWND w; COLORREF c; } g_colors[128]; static int g_ncolors;
