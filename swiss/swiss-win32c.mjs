@@ -812,6 +812,10 @@ static void swiss_measure(Node* n, int* mw, int* mh) {
   *mw = (n->w >= 0) ? n->w : w; *mh = (n->h >= 0) ? n->h : h;
 }
 
+// overflow:auto — while laying out an overflow subtree this holds the viewport
+// rect (client coords); leaves inside are window-region-clipped to it so scrolled
+// content stays within the box.
+static RECT g_clip; static int g_clipping;
 static void swiss_arrange(Node* n, int x, int y, int w, int h) {
   int moved = (n->rx != x || n->ry != y || n->rw != w || n->rh != h);  // skip no-op moves (less flicker)
   n->rx = x; n->ry = y; n->rw = w; n->rh = h;   // remember rect for bg painting
@@ -833,6 +837,13 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
         // and pills skip this — corners come from the GDI+ drawing.
         if (n->radius > 0 && !swiss_is_btn(n->hwnd) && !swiss_is_pill(n->hwnd))
           SetWindowRgn(n->hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, n->radius * 2, n->radius * 2), TRUE);
+        // inside an overflow subtree: clip this leaf to the scroll viewport
+        else if (g_clipping) {
+          RECT lr = { x, y, x + w, y + h }, is;
+          if (IntersectRect(&is, &lr, &g_clip))
+            SetWindowRgn(n->hwnd, CreateRectRgn(is.left - x, is.top - y, is.right - x, is.bottom - y), TRUE);
+          else SetWindowRgn(n->hwnd, CreateRectRgn(0, 0, 0, 0), TRUE);
+        } else if (!n->radius) SetWindowRgn(n->hwnd, NULL, TRUE);   // clear any stale clip when scrolled back into view
       }
     }
     return;
@@ -848,7 +859,20 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
   }
   if (vis > 1) used += n->gap * (vis - 1);
   int extra = avail - used; if (extra < 0) extra = 0;
-  int cursor = n->dir ? ix : iy;
+  // overflow:auto (vertical): clamp the scroll offset to the content, shift the
+  // content up by it, and clip children to the viewport during this subtree.
+  int scroff = 0;
+  RECT clipSave = g_clip; int clippingSave = g_clipping;
+  if (n->overflow && !n->dir) {
+    n->contenth = used;
+    int maxs = used - avail; if (maxs < 0) maxs = 0;
+    if (n->scrolly > maxs) n->scrolly = maxs; if (n->scrolly < 0) n->scrolly = 0;
+    scroff = n->scrolly;
+    RECT vp = { x, y, x + w, y + h };
+    if (g_clipping) IntersectRect(&g_clip, &clipSave, &vp); else g_clip = vp;
+    g_clipping = 1;
+  }
+  int cursor = n->dir ? ix : (iy - scroff);
   if (!totflex) { if (n->justify == 1) cursor += extra / 2; else if (n->justify == 2) cursor += extra; }
   for (int i = 0; i < n->nkids; i++) {
     Node* c = n->kids[i]; if (!c->visible) continue;
@@ -878,8 +902,17 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
     else        swiss_arrange(c, ix + leadC + co, cursor, cc, cm);
     cursor += cm + trailM + n->gap;                      // trailing main margin after
   }
+  if (n->overflow && !n->dir) { g_clip = clipSave; g_clipping = clippingSave; }
 }
 
+// innermost overflow node whose laid-out rect contains a client point (wheel)
+static Node* swiss_scroll_hit(Node* n, int px, int py) {
+  for (int i = n->nkids - 1; i >= 0; i--) if (n->kids[i]->visible) {
+    Node* r = swiss_scroll_hit(n->kids[i], px, py); if (r) return r;
+  }
+  if (n->overflow && px >= n->rx && px < n->rx + n->rw && py >= n->ry && py < n->ry + n->rh) return n;
+  return NULL;
+}
 static void swiss_relayout(void) {
   if (!g_root || !g_main) return;
   RECT rc; GetClientRect(g_main, &rc);
@@ -1245,6 +1278,13 @@ ${cmdCases || '      break;'}
       SetBkColor(dc, g_bgcol); SetBkMode(dc, OPAQUE); return (LRESULT)g_white;
     }
     case WM_SIZE: swiss_relayout(); return 0;
+    case WM_MOUSEWHEEL: {   // scroll the innermost overflow:auto View under the cursor
+      int delta = (int)(short)HIWORD(wp);
+      POINT pt = { (short)LOWORD(lp), (short)HIWORD(lp) }; ScreenToClient(hwnd, &pt);
+      Node* sn = g_root ? swiss_scroll_hit(g_root, pt.x, pt.y) : NULL;
+      if (sn) { sn->scrolly -= delta / 2; swiss_relayout(); InvalidateRect(hwnd, NULL, TRUE); return 0; }
+      break;
+    }
     case WM_DESTROY: PostQuitMessage(0); return 0;
   }
   return DefWindowProcA(hwnd, msg, wp, lp);
