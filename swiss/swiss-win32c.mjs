@@ -1048,7 +1048,10 @@ static HWND g_focus;
 static void swiss_paint_frames(Node* n, HDC hdc) {
   if (n->frame && n->hwnd) {
     RECT r = { n->rx, n->ry, n->rx + n->rw, n->ry + n->rh };
-    int foc = (n->hwnd == g_focus);
+    // accent border only for keyboard focus (like web :focus-visible): skip it
+    // when Windows has hidden focus cues (mouse-driven UI).
+    int hidefocus = (int)(SendMessageW(g_main, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS);
+    int foc = (n->hwnd == g_focus) && !hidefocus;
     swiss_fill_round(hdc, r, n->radius, C2A(g_bgcol), foc ? C2A(RGB(0, 102, 204)) : C2A(n->framecol), foc ? 2.0f : 1.0f);
   }
   for (int i = 0; i < n->nkids; i++) if (n->kids[i]->visible) swiss_paint_frames(n->kids[i], hdc);
@@ -1070,7 +1073,9 @@ static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
     // paint the panel color behind first (no window region — GDI+ AA rounds it)
     HBRUSH bb = CreateSolidBrush(g_btns[i].behind); FillRect(d->hDC, &d->rcItem, bb); DeleteObject(bb);
     int r = g_btns[i].radius;
-    int focus = (d->itemState & ODS_FOCUS) ? 1 : 0;
+    // show the focus ring only for keyboard focus (like web :focus-visible) —
+    // Windows sets ODS_NOFOCUSRECT once the UI is driven by the mouse.
+    int focus = ((d->itemState & ODS_FOCUS) && !(d->itemState & ODS_NOFOCUSRECT)) ? 1 : 0;
     // flat JSX/web look: solid fill, no gradient/rim. Colored buttons have no
     // border; plain (no-bg) buttons get a light gray border; focus adds a ring.
     ARGB border = focus ? C2A(RGB(0, 102, 204)) : plain ? C2A(RGB(205, 208, 212)) : 0;
@@ -1339,6 +1344,7 @@ ${cmdCases || '      break;'}
       SetBkColor(dc, g_bgcol); SetBkMode(dc, OPAQUE); return (LRESULT)g_white;
     }
     case WM_SIZE: swiss_relayout(); return 0;
+    case WM_UPDATEUISTATE: InvalidateRect(hwnd, NULL, FALSE); break;   // focus-cue visibility changed → redraw indicators
     case WM_MOUSEWHEEL: {   // scroll the innermost overflow:auto View under the cursor
       int delta = (int)(short)HIWORD(wp);
       POINT pt = { (short)LOWORD(lp), (short)HIWORD(lp) }; ScreenToClient(hwnd, &pt);
@@ -1380,6 +1386,7 @@ ${refs.map((r) => `  S.${r.name}__current = ${r.cinit};`).join('\n')}
   swiss_effect(&S);
   swiss_relayout();
   ShowWindow(g_main, show); UpdateWindow(g_main);
+  SendMessageW(g_main, WM_CHANGEUISTATE, MAKEWPARAM(UIS_INITIALIZE, UISF_HIDEFOCUS), 0);   // hide focus cues until keyboard nav (web :focus-visible feel)
   MSG m;
   while (GetMessage(&m, NULL, 0, 0) > 0) {
     if (IsDialogMessage(g_main, &m)) continue;   // tab navigation between controls
