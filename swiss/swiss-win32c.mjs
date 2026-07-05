@@ -338,6 +338,18 @@ function emit(ast, opts) {
         __bgtok: bgTok >= 0 ? bgTok : (bg ? -1 : (scope && scope.__bgtok)) };
       if (tag === 'form' && a.onSubmit) childScope.__form = a.onSubmit;
       buildChildren(el.children, v, childScope);
+      // reactive View background: style={cond?A:B} highlight (selected card/row) —
+      // update the node bg on state change and repaint just its rect (no flicker).
+      if (st && st.__cond && cellsIn(st.__cond.test).size && !scope.__inrow) {
+        const cnd = st.__cond;
+        if (cnd.a.backgroundColor || cnd.b.backgroundColor) {
+          const nf = vid('vn'); stateFields.push(`  Node* ${nf};`);
+          out.build.push(`  s->${nf} = ${v};`);
+          const cc = (x) => tokIdx(x) >= 0 ? `swiss_tok(${tokIdx(x)})` : (colorref(x) || 'g_bgcol');
+          const snip = `swiss_restyle_node(s->${nf}, (${cexpr(cnd.test, scope).c}) ? ${cc(cnd.a.backgroundColor)} : ${cc(cnd.b.backgroundColor)});`;
+          cellsIn(cnd.test).forEach((cn) => deps[cn] && deps[cn].push(snip));
+        }
+      }
       selfStep(v); pack(v); return v;
     }
     if (name === 'ScrollView') {  // no native scroll in v0.1 → plain column
@@ -1154,7 +1166,7 @@ static void swiss_anim_tick(void) {
     int pct = (int)((now - g_anim[i].start) * 100 / SWISS_ANIM_MS);
     if (pct >= 100) { pct = 100; g_anim[i].active = 0; } else any = 1;
     swiss_apply_c(g_anim[i].w, g_anim[i].kind, swiss_lerp(g_anim[i].from, g_anim[i].to, pct));
-    InvalidateRect(g_anim[i].w, NULL, FALSE);
+    if (g_anim[i].kind != 3) InvalidateRect(g_anim[i].w, NULL, FALSE);   // kind 3 (node) invalidates its rect in apply_c
   }
   if (!any) { KillTimer(g_main, 0x5A11); g_nanim = 0; }
 }
@@ -1231,15 +1243,18 @@ static void swiss_btn_style(HWND w, COLORREF bg, int hasbg, COLORREF fg, int has
 static COLORREF swiss_cur_c(HWND w, int kind) {
   if (kind == 0) { for (int i = 0; i < g_ncolors; i++) if (g_colors[i].w == w) return g_colors[i].c; }
   else if (kind == 1) { for (int i = 0; i < g_nbgs; i++) if (g_bgs[i].w == w) return g_bgs[i].c; }
+  else if (kind == 3) { return ((Node*)w)->bg; }   // View node background
   else { for (int i = 0; i < g_nbtns; i++) if (g_btns[i].w == w) return g_btns[i].bg; }
   return 0;
 }
 static void swiss_apply_c(HWND w, int kind, COLORREF c) {
   if (kind == 0) { for (int i = 0; i < g_ncolors; i++) if (g_colors[i].w == w) { g_colors[i].c = c; g_colors[i].tok = 0; } }
   else if (kind == 1) { for (int i = 0; i < g_nbgs; i++) if (g_bgs[i].w == w) { if (g_bgs[i].b) DeleteObject(g_bgs[i].b); g_bgs[i].b = CreateSolidBrush(c); g_bgs[i].c = c; g_bgs[i].tok = 0; } }
+  else if (kind == 3) { Node* nd = (Node*)w; nd->bg = c; nd->bgtok = 0; nd->hasbg = 1; RECT r = { nd->rx, nd->ry, nd->rx + nd->rw, nd->ry + nd->rh }; InvalidateRect(g_main, &r, FALSE); }
   else { for (int i = 0; i < g_nbtns; i++) if (g_btns[i].w == w) { g_btns[i].bg = c; g_btns[i].hasbg = 1; g_btns[i].bgtok = 0; } }
 }
 static void swiss_restyle_btn(HWND w, COLORREF bg) { swiss_anim(w, 2, bg); }
+static void swiss_restyle_node(Node* n, COLORREF bg) { swiss_anim((HWND)n, 3, bg); }
 static COLORREF swiss_darken(COLORREF c, int pct) { return RGB(GetRValue(c)*pct/100, GetGValue(c)*pct/100, GetBValue(c)*pct/100); }
 static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
   for (int i = 0; i < g_nbtns; i++) if (g_btns[i].w == d->hwndItem) {
