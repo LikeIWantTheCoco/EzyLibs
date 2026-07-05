@@ -15,7 +15,11 @@
 //
 // Usage:  node swiss-gtkc.mjs App.jsx --out frontend.c [--title T] [--sig sig.json]
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { parse, walk, cstr, cType, stripParens, createFrontend } from './swiss-jsx-core.mjs';
+import { parse, walk, cstr, cType, stripParens, createFrontend, THEME, isToken, TOKENS } from './swiss-jsx-core.mjs';
+
+// @define-color lines for the theme tokens at index i (0=light, 1=dark); the
+// placeholder color rides along as muted so it flips too.
+const tokenDefs = (i) => TOKENS.map((t) => `@define-color swiss_${t} ${THEME[t][i]};`).join(' ') + ` @define-color placeholder_text_color ${THEME.muted[i]};`;
 
 // ───────────────────────── emit ─────────────────────────
 function emit(ast, opts) {
@@ -58,6 +62,7 @@ function emit(ast, opts) {
   // build (or reuse) a CSS class for a merged style object, keyed by `key`
   function classForMerged(key, st) {
     const css = [];
+    const col = (x) => isToken(x) ? `@swiss_${x}` : x;   // theme token → named CSS color (flips on setTheme)
     for (const k in st) {
       const v = st[k];
       // padding is inner spacing (not outer margin). When an explicit height is
@@ -70,11 +75,11 @@ function emit(ast, opts) {
       else if (k === 'height') css.push(`min-height:${v}px`);
       else if (k === 'fontSize') css.push(`font-size:${v}px`);
       else if (k === 'fontWeight') css.push(`font-weight:${v}`);
-      else if (k === 'color') css.push(`color:${v}`);
-      else if (k === 'backgroundColor') css.push(`background-color:${v};background-image:none`);
+      else if (k === 'color') css.push(`color:${col(v)}`);
+      else if (k === 'backgroundColor') css.push(`background-color:${col(v)};background-image:none`);
       else if (k === 'borderWidth') css.push(`border-width:${v}px;border-style:solid`);
-      else if (k === 'borderColor') css.push(`border-color:${v}`);
-      else if (k === 'border') { if (v !== 'none') { const m = String(v).match(/(\d+)px\s+(\w+)\s+(\S+)/); if (m) css.push(`border-width:${m[1]}px;border-style:${m[2]};border-color:${m[3]}`); } }
+      else if (k === 'borderColor') css.push(`border-color:${col(v)}`);
+      else if (k === 'border') { if (v !== 'none') { const m = String(v).match(/(\d+)px\s+(\w+)\s+(\S+)/); if (m) css.push(`border-width:${m[1]}px;border-style:${m[2]};border-color:${col(m[3])}`); } }
       else if (k === 'borderRadius') css.push(`border-radius:${v}px`);
       else if (k === 'boxShadow') css.push(`box-shadow:0 2px 8px rgba(0,0,0,0.18)`);
       else if (k === 'textAlign') css.push(`text-align:${v}`);
@@ -818,22 +823,19 @@ static void swiss_set_theme(long long dark) {
     g_theme_prov = gtk_css_provider_new();
     gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(g_theme_prov), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION - 1);
   }
-  // shape: flat, rounded, padded controls + a web-like accent focus ring — same
-  // in both themes
+  // structural CSS (theme-independent) — colors come from @swiss_* named colors
+  // defined per-theme below, so a token used in app styles flips on setTheme.
+  // The placeholder's theme-named color (often an accent) is redefined to muted.
   const char* shape =
-    // GTK draws the entry placeholder with the theme's named color (often an
-    // accent like orange) that a plain CSS color rule cannot reach — redefine
-    // that named color so the placeholder is a neutral dark like web/win32.
-    "@define-color placeholder_text_color #333333;"
     " entry, button, combobox { border-radius:4px; min-height:0; transition:120ms; }"
-    " button { border:none; box-shadow:none; background-image:none; text-shadow:none; }"   // flat like JSX/web (drop the theme's border/bevel)
-    " button:hover, button:active { background-image:none; }"                               // no hover/press shading (JSX declares no :hover)
-    " entry { padding:4px 8px; border:1px solid #cccccc; }"
-    " entry:focus { border-color:#0066cc; }"
-    " button:focus, entry:focus, combobox:focus { outline-color:#0066cc; outline-style:solid; outline-width:2px; }";
-  char* css = g_strconcat(shape, dark
-    ? " window { background-color:#1e1e1e; color:#e6e6e6; } entry, textview, text { background-color:#2a2a2a; color:#e6e6e6; } entry { border-color:#444; }"
-    : " window { background-color:#ffffff; color:#1a1a1a; } entry, textview, text { background-color:#ffffff; color:#1a1a1a; }", NULL);
+    " button { border:none; box-shadow:none; background-image:none; text-shadow:none; }"
+    " button:hover, button:active { background-image:none; }"
+    " entry { padding:4px 8px; border:1px solid @swiss_border; }"
+    " entry:focus { border-color:@swiss_primary; }"
+    " button:focus, entry:focus, combobox:focus { outline-color:@swiss_primary; outline-style:solid; outline-width:2px; }"
+    " window { background-color:@swiss_bg; color:@swiss_text; }"
+    " entry, textview, text { background-color:@swiss_card; color:@swiss_text; }";
+  char* css = g_strconcat(dark ? ${cstr(tokenDefs(1))} : ${cstr(tokenDefs(0))}, shape, NULL);
   gtk_css_provider_load_from_data(g_theme_prov, css, -1, NULL);
   g_free(css);
 }

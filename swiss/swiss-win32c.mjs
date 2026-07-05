@@ -21,7 +21,13 @@
 //
 // Usage:  node swiss-win32c.mjs App.jsx --out frontend.c [--title T] [--sig s.json]
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { parse, walk, cstr, cType, stripParens, createFrontend } from './swiss-jsx-core.mjs';
+import { parse, walk, cstr, cType, stripParens, createFrontend, THEME, TOKENS, isToken } from './swiss-jsx-core.mjs';
+
+// theme token → its index (used for runtime resolution); -1 if not a token.
+const tokIdx = (v) => (isToken(v) ? TOKENS.indexOf(v) : -1);
+// C table of [light,dark] COLORREFs per token, in TOKENS order.
+const rgbC = (h) => { h = String(h).replace('#', ''); return `RGB(0x${h.slice(0, 2)}, 0x${h.slice(2, 4)}, 0x${h.slice(4, 6)})`; };
+const tokTableC = () => TOKENS.map((t) => `  { ${rgbC(THEME[t][0])}, ${rgbC(THEME[t][1])} },   // ${t}`).join('\n');
 
 // ───────────────────────── emit ─────────────────────────
 function emit(ast, opts) {
@@ -192,18 +198,28 @@ function emit(ast, opts) {
     const und = st && st.textDecoration && /underline/.test(st.textDecoration) ? 1 : 0;
     const strk = st && st.textDecoration && /line-through/.test(st.textDecoration) ? 1 : 0;
     out.build.push(`  SendMessageA(${hw}, WM_SETFONT, (WPARAM)swiss_font5(${sz}, ${bold}, ${ital}, ${und}, ${strk}), TRUE);`);
-    // text color — static, or chosen at runtime for a `cond ? a : b` style
-    let col = st && colorref(st.color);
+    // text color — static, a theme token (resolved live), or a `cond ? a : b`
+    const colTok = st ? tokIdx(st.color) : -1;
+    let col = colTok >= 0 ? `swiss_tok(${colTok})` : (st && colorref(st.color));
     const cnd = st && st.__cond;
     if (cnd && (cnd.a.color || cnd.b.color)) {
-      const ca = colorref(cnd.a.color) || 'RGB(0,0,0)', cb = colorref(cnd.b.color) || 'RGB(0,0,0)';
-      col = `(${cexpr(cnd.test, scope || {}).c} ? ${ca} : ${cb})`;
+      const cc = (x) => tokIdx(x) >= 0 ? `swiss_tok(${tokIdx(x)})` : (colorref(x) || 'RGB(0,0,0)');
+      col = `(${cexpr(cnd.test, scope || {}).c} ? ${cc(cnd.a.color)} : ${cc(cnd.b.color)})`;
     }
-    if (col) out.build.push(`  swiss_set_color(${hw}, ${col});`);
+    // a token/conditional color must re-resolve on theme flip → store & resolve in
+    // the WM_CTLCOLORSTATIC handler, so register the token index when it is one.
+    if (colTok >= 0 && !cnd) out.build.push(`  swiss_set_color_tok(${hw}, ${colTok + 1});`);
+    else if (col) out.build.push(`  swiss_set_color(${hw}, ${col});`);
     // a Text paints opaque on its own backgroundColor, else the inherited panel
-    // bg (so text on a colored View shows correctly without transparency)
-    const bg = kind === 'text' ? ((st && colorref(st.backgroundColor)) || (scope && scope.__bg)) : null;
-    if (bg) out.build.push(`  swiss_set_bg(${hw}, ${bg});`);
+    // bg (so text on a colored View shows correctly without transparency). Token
+    // panels register the token so the text bg re-themes on setTheme.
+    if (kind === 'text') {
+      const ownTok = st ? tokIdx(st.backgroundColor) : -1;
+      const bgTokF = ownTok >= 0 ? ownTok : (scope && scope.__bgtok != null ? scope.__bgtok : -1);
+      const bg = (st && !isToken(st.backgroundColor) && colorref(st.backgroundColor)) || (scope && scope.__bg);
+      if (bgTokF >= 0) out.build.push(`  swiss_set_bg_tok(${hw}, ${bgTokF + 1});`);
+      else if (bg) out.build.push(`  swiss_set_bg(${hw}, ${bg});`);
+    }
   }
 
   // text children → an snprintf snippet writing into a control's text
@@ -279,11 +295,13 @@ function emit(ast, opts) {
     if (name === 'View' || name === 'Tab') {
       const v = vid('v');
       out.build.push(`  Node* ${v} = swiss_view(${na.dir}, ${na.pad}, ${na.gap}, ${na.flex}, ${na.w}, ${na.h}, ${na.justify}, ${na.align});`);
-      const bg = st && colorref(st.backgroundColor);
-      if (bg) out.build.push(`  ${v}->bg = ${bg}; ${v}->hasbg = 1;`);
+      const bgTok = st ? tokIdx(st.backgroundColor) : -1;
+      const bg = bgTok >= 0 ? `swiss_tok(${bgTok})` : (st && colorref(st.backgroundColor));
+      if (bgTok >= 0) out.build.push(`  ${v}->bgtok = ${bgTok + 1}; ${v}->hasbg = 1;`);
+      else if (bg) out.build.push(`  ${v}->bg = ${bg}; ${v}->hasbg = 1;`);
       // propagate the effective panel background to descendants so their text
       // controls paint opaque on the right color (no transparency → no flicker)
-      let childScope = { ...scope, __bg: bg || scope.__bg };
+      let childScope = { ...scope, __bg: bg || scope.__bg, __bgtok: bgTok >= 0 ? bgTok : (scope && scope.__bgtok) };
       if (tag === 'form' && a.onSubmit) childScope.__form = a.onSubmit;
       buildChildren(el.children, v, childScope);
       selfStep(v); pack(v); return v;
@@ -340,9 +358,12 @@ function emit(ast, opts) {
       // every button is owner-drawn (GDI+ AA rounded) for a consistent flat,
       // modern look — colored from backgroundColor/color, or a light surface +
       // border when plain. (No BS_DEFPUSHBUTTON: owner-draw can't be the default.)
-      const bgCol = colorref(st && st.backgroundColor), fgCol = colorref(st && st.color);
+      const bgTk = tokIdx(st && st.backgroundColor), fgTk = tokIdx(st && st.color);
+      const bgCol = bgTk >= 0 ? '0' : colorref(st && st.backgroundColor), fgCol = fgTk >= 0 ? '0' : colorref(st && st.color);
+      const behTk = (scope && scope.__bgtok != null) ? scope.__bgtok : -1;
+      const behind = behTk >= 0 ? '0' : ((scope && scope.__bg) || 'g_bgcol');
       out.build.push(`  HWND ${hw} = CreateWindowExA(0, "BUTTON", ${cstr(label)}, WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
-      out.build.push(`  swiss_btn_style(${hw}, ${bgCol || '0'}, ${bgCol ? 1 : 0}, ${fgCol || '0'}, ${fgCol ? 1 : 0}, SC(${na.radius || 6}), ${(scope && scope.__bg) || 'g_bgcol'});`);
+      out.build.push(`  swiss_btn_style(${hw}, ${bgCol || '0'}, ${(bgCol || bgTk >= 0) ? 1 : 0}, ${fgCol || '0'}, ${(fgCol || fgTk >= 0) ? 1 : 0}, SC(${na.radius || 6}), ${behind}, ${bgTk + 1}, ${fgTk + 1}, ${behTk + 1});`);
       if (scope.__index) out.build.push(`  SetWindowLongPtrA(${hw}, GWLP_USERDATA, (LONG_PTR)${scope.__index.c});`);
       if (dynTitle) {
         const tv = cexpr(dynTitle, scope);
@@ -764,6 +785,7 @@ typedef struct Node {
   int alpha;                 // opacity → 0..255 alpha for the painted background (255 = opaque)
   int overflow, scrolly, contenth;   // overflow:auto/scroll → vertical scroll offset + content height
   COLORREF bg; int hasbg, visible;
+  int bgtok;                 // theme token+1 for the background (0 = use bg literal) — resolved at paint
 } Node;
 
 static HINSTANCE g_hinst;
@@ -774,6 +796,7 @@ static double g_scale = 1.0;            // HiDPI factor (dpi/96) — crisp + cor
 static int swiss_is_btn(HWND);          // (defined below; used by the layout)
 static int swiss_is_pill(HWND);
 static void swiss_pill_metrics(HWND, int*, int*);   // (spacing, lineh) for measuring owner-draw text
+static COLORREF swiss_tok(int);                     // theme token → current-theme color (defined below)
 
 static Node* swiss_node_new(void) { Node* n = (Node*)calloc(1, sizeof(Node)); n->w = n->h = -1; n->visible = 1; return n; }
 static Node* swiss_view(int dir, int pad, int gap, int flex, int w, int h, int justify, int align) {
@@ -996,18 +1019,32 @@ static HFONT swiss_font5(int px, int bold, int ital, int und, int strk) {
 static HFONT swiss_font(int px, int bold) { return swiss_font5(px, bold, 0, 0, 0); }
 
 // ── per-control text color (applied via WM_CTLCOLORSTATIC) ──
-static struct { HWND w; COLORREF c; } g_colors[128]; static int g_ncolors;
-static void swiss_set_color(HWND w, COLORREF c) { if (g_ncolors < 128) { g_colors[g_ncolors].w = w; g_colors[g_ncolors].c = c; g_ncolors++; } }
-static int swiss_get_color(HWND w, COLORREF* out) { for (int i = 0; i < g_ncolors; i++) if (g_colors[i].w == w) { *out = g_colors[i].c; return 1; } return 0; }
+static struct { HWND w; COLORREF c; int tok; } g_colors[128]; static int g_ncolors;   // tok = token+1 (0 = literal c)
+static void swiss_set_color(HWND w, COLORREF c) { if (g_ncolors < 128) { g_colors[g_ncolors].w = w; g_colors[g_ncolors].c = c; g_colors[g_ncolors].tok = 0; g_ncolors++; } }
+static void swiss_set_color_tok(HWND w, int tok) { if (g_ncolors < 128) { g_colors[g_ncolors].w = w; g_colors[g_ncolors].tok = tok; g_ncolors++; } }
+static int swiss_get_color(HWND w, COLORREF* out) { for (int i = 0; i < g_ncolors; i++) if (g_colors[i].w == w) { *out = g_colors[i].tok ? swiss_tok(g_colors[i].tok - 1) : g_colors[i].c; return 1; } return 0; }
 
 // ── per-control background color (e.g. a colored Text/badge) ──
-static struct { HWND w; COLORREF c; HBRUSH b; } g_bgs[64]; static int g_nbgs;
-static void swiss_set_bg(HWND w, COLORREF c) { if (g_nbgs < 64) { g_bgs[g_nbgs].w = w; g_bgs[g_nbgs].c = c; g_bgs[g_nbgs].b = CreateSolidBrush(c); g_nbgs++; } }
-static int swiss_get_bg(HWND w, COLORREF* c, HBRUSH* b) { for (int i = 0; i < g_nbgs; i++) if (g_bgs[i].w == w) { *c = g_bgs[i].c; *b = g_bgs[i].b; return 1; } return 0; }
+static struct { HWND w; COLORREF c; HBRUSH b; int tok; } g_bgs[64]; static int g_nbgs;   // tok = token+1 (0 = literal)
+static void swiss_set_bg(HWND w, COLORREF c) { if (g_nbgs < 64) { g_bgs[g_nbgs].w = w; g_bgs[g_nbgs].c = c; g_bgs[g_nbgs].b = CreateSolidBrush(c); g_bgs[g_nbgs].tok = 0; g_nbgs++; } }
+static void swiss_set_bg_tok(HWND w, int tok) { if (g_nbgs < 64) { COLORREF c = swiss_tok(tok - 1); g_bgs[g_nbgs].w = w; g_bgs[g_nbgs].c = c; g_bgs[g_nbgs].b = CreateSolidBrush(c); g_bgs[g_nbgs].tok = tok; g_nbgs++; } }
+static int swiss_get_bg(HWND w, COLORREF* c, HBRUSH* b) {
+  for (int i = 0; i < g_nbgs; i++) if (g_bgs[i].w == w) {
+    if (g_bgs[i].tok) { COLORREF cur = swiss_tok(g_bgs[i].tok - 1); if (cur != g_bgs[i].c) { if (g_bgs[i].b) DeleteObject(g_bgs[i].b); g_bgs[i].b = CreateSolidBrush(cur); g_bgs[i].c = cur; } }   // re-theme
+    *c = g_bgs[i].c; *b = g_bgs[i].b; return 1;
+  }
+  return 0;
+}
 
 static HBRUSH g_white;   // themeable window/control background brush
 static COLORREF g_bgcol = RGB(255, 255, 255), g_fgcol = RGB(26, 26, 26);   // light default
 static int g_darktheme;
+// semantic theme tokens: [light, dark]; swiss_tok() resolves for the current theme
+// so token colors flip live when swiss_set_theme() redraws.
+static const COLORREF g_swiss_tok[][2] = {
+${tokTableC()}
+};
+static COLORREF swiss_tok(int i) { return g_swiss_tok[i][g_darktheme]; }
 
 // paint View backgroundColor rects (containers have no HWND) — parents first,
 // so a child's bg draws over its parent's; controls then paint over the top.
@@ -1024,10 +1061,11 @@ static void swiss_paint_bg(Node* n, HDC hdc) {
     RECT r = { n->rx, n->ry, n->rx + n->rw, n->ry + n->rh };
     if (n->shadow) swiss_shadow(hdc, r, n->radius);            // drop shadow behind the panel
     int a = n->alpha ? n->alpha : 255;                          // opacity (0 = unset = opaque)
+    COLORREF nbg = n->bgtok ? swiss_tok(n->bgtok - 1) : n->bg;  // theme token resolves per current theme
     if (n->hasbg && n->radius == 0 && a == 255 && !n->hasborder) {
-      HBRUSH b = CreateSolidBrush(n->bg); FillRect(hdc, &r, b); DeleteObject(b);   // fast opaque path
+      HBRUSH b = CreateSolidBrush(nbg); FillRect(hdc, &r, b); DeleteObject(b);   // fast opaque path
     } else {
-      ARGB fill = n->hasbg ? (((ARGB)a << 24) | (C2A(n->bg) & 0xFFFFFFu)) : 0;      // alpha 0 = no fill (border only)
+      ARGB fill = n->hasbg ? (((ARGB)a << 24) | (C2A(nbg) & 0xFFFFFFu)) : 0;      // alpha 0 = no fill (border only)
       ARGB bord = n->hasborder ? (((ARGB)a << 24) | (C2A(n->bordercol) & 0xFFFFFFu)) : 0;
       swiss_fill_round(hdc, r, n->radius, fill, bord, n->hasborder ? (float)n->borderw : 0.0f);
     }
@@ -1058,20 +1096,24 @@ static void swiss_paint_frames(Node* n, HDC hdc) {
 }
 
 // ── owner-drawn buttons: GDI+ antialiased rounded fill on the panel bg behind ──
-static struct { HWND w; COLORREF bg, fg, behind; int radius, hasbg, hasfg; } g_btns[64]; static int g_nbtns;
-static void swiss_btn_style(HWND w, COLORREF bg, int hasbg, COLORREF fg, int hasfg, int radius, COLORREF behind) {
+static struct { HWND w; COLORREF bg, fg, behind; int radius, hasbg, hasfg, bgtok, fgtok, behindtok; } g_btns[64]; static int g_nbtns;
+static void swiss_btn_style(HWND w, COLORREF bg, int hasbg, COLORREF fg, int hasfg, int radius, COLORREF behind, int bgtok, int fgtok, int behindtok) {
   if (g_nbtns < 64) { g_btns[g_nbtns].w = w; g_btns[g_nbtns].bg = bg; g_btns[g_nbtns].hasbg = hasbg;
-    g_btns[g_nbtns].fg = fg; g_btns[g_nbtns].hasfg = hasfg; g_btns[g_nbtns].radius = radius; g_btns[g_nbtns].behind = behind; g_nbtns++; }
+    g_btns[g_nbtns].fg = fg; g_btns[g_nbtns].hasfg = hasfg; g_btns[g_nbtns].radius = radius; g_btns[g_nbtns].behind = behind;
+    g_btns[g_nbtns].bgtok = bgtok; g_btns[g_nbtns].fgtok = fgtok; g_btns[g_nbtns].behindtok = behindtok; g_nbtns++; }
 }
 static COLORREF swiss_darken(COLORREF c, int pct) { return RGB(GetRValue(c)*pct/100, GetGValue(c)*pct/100, GetBValue(c)*pct/100); }
 static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
   for (int i = 0; i < g_nbtns; i++) if (g_btns[i].w == d->hwndItem) {
     int plain = !g_btns[i].hasbg;
-    COLORREF bg = plain ? RGB(245, 246, 248) : g_btns[i].bg;   // light surface for plain buttons
+    // resolve theme tokens for the current theme (flips on setTheme redraw)
+    COLORREF tbg = g_btns[i].bgtok ? swiss_tok(g_btns[i].bgtok - 1) : g_btns[i].bg;
+    COLORREF tbehind = g_btns[i].behindtok ? swiss_tok(g_btns[i].behindtok - 1) : g_btns[i].behind;
+    COLORREF bg = plain ? (g_darktheme ? RGB(58, 64, 72) : RGB(245, 246, 248)) : tbg;   // light/dark surface for plain buttons
     // flat like JSX/web: the button color is static (no hover/press shading — the
     // JSX styles declare no :hover, so the fill stays constant like the DOM)
     // paint the panel color behind first (no window region — GDI+ AA rounds it)
-    HBRUSH bb = CreateSolidBrush(g_btns[i].behind); FillRect(d->hDC, &d->rcItem, bb); DeleteObject(bb);
+    HBRUSH bb = CreateSolidBrush(tbehind); FillRect(d->hDC, &d->rcItem, bb); DeleteObject(bb);
     int r = g_btns[i].radius;
     // show the focus ring only for keyboard focus (like web :focus-visible) —
     // Windows sets ODS_NOFOCUSRECT once the UI is driven by the mouse.
@@ -1081,7 +1123,7 @@ static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
     ARGB border = focus ? C2A(RGB(0, 102, 204)) : plain ? C2A(RGB(205, 208, 212)) : 0;
     swiss_fill_round(d->hDC, d->rcItem, r, C2A(bg), border, (focus || plain) ? (focus ? 2.0f : 1.0f) : 0.0f);
     SetBkMode(d->hDC, TRANSPARENT);
-    SetTextColor(d->hDC, g_btns[i].hasfg ? g_btns[i].fg : GetSysColor(COLOR_BTNTEXT));
+    SetTextColor(d->hDC, g_btns[i].hasfg ? (g_btns[i].fgtok ? swiss_tok(g_btns[i].fgtok - 1) : g_btns[i].fg) : (plain ? g_fgcol : GetSysColor(COLOR_BTNTEXT)));
     HFONT f = (HFONT)SendMessageA(d->hwndItem, WM_GETFONT, 0, 0);
     HGDIOBJ of = f ? SelectObject(d->hDC, f) : NULL;
     char buf[256]; GetWindowTextA(d->hwndItem, buf, sizeof buf);

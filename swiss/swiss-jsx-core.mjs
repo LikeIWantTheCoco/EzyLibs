@@ -11,6 +11,9 @@
 // swiss_strdup, swiss_upper, …). Each backend's runtime defines those (libc on
 // win32, thin GLib wrappers on gtk), which lets cexpr/genStmt be identical.
 import { parse as babelParse } from '@babel/parser';
+// semantic theme tokens live in a dependency-free module (shared with the web
+// runtime); re-export so the native translators keep importing them from here.
+export { THEME, TOKENS, isToken } from './swiss-theme.mjs';
 
 export function parse(src) { return babelParse(src, { sourceType: 'module', plugins: ['jsx'] }); }
 

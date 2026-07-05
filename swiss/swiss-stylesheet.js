@@ -4,6 +4,8 @@
 // target interprets the same keys: web maps them to CSS here; a native target
 // maps them to widget props. Keep keys to the RN-ish layout/appearance subset
 // so they port.
+import { isToken } from './swiss-theme.mjs';
+
 export const StyleSheet = {
   create: (sheet) => sheet,
   // merge an array of style objects (or a single one) into one
@@ -29,7 +31,8 @@ const EXPAND = {
 };
 
 function put(out, key, val) {
-  if (typeof val === 'number' && !UNITLESS.has(key)) out[key] = val + 'px';
+  if (isToken(val)) out[key] = `var(--swiss-${val})`;                 // theme token → CSS variable (flips with data-theme)
+  else if (typeof val === 'number' && !UNITLESS.has(key)) out[key] = val + 'px';
   else out[key] = val;
 }
 

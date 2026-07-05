@@ -9,6 +9,7 @@
     "swiss-host-web.js",
     "swiss-components.js",
     "swiss-stylesheet.js",
+    "swiss-theme.mjs",
     "swiss-bridge.js",
     "swiss-gtkc.mjs",
     "swiss-win32c.mjs",

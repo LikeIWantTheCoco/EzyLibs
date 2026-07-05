@@ -11,6 +11,7 @@
 import { makeRenderer } from './swiss-reconciler.js';
 import webHost from './swiss-host-web.js';
 import { ezy, setBackend, connectEzy } from './swiss-bridge.js';
+import { THEME, TOKENS } from './swiss-theme.mjs';
 
 const renderer = makeRenderer(webHost);
 
@@ -31,8 +32,13 @@ let fontFaceInjected = false;
 function injectFontFace() {
   if (fontFaceInjected || typeof document === 'undefined') return;
   fontFaceInjected = true;
+  // theme tokens as CSS variables — flip by toggling data-theme on the root, so
+  // every `var(--swiss-*)` (from a token color) updates with no re-render.
+  const vars = (i) => TOKENS.map((t) => `--swiss-${t}:${THEME[t][i]}`).join(';');
   const s = document.createElement('style');
   s.textContent =
+    ":root{" + vars(0) + "}" +
+    ":root[data-theme='dark']{" + vars(1) + "}" +
     "@font-face{font-family:'DejaVu Sans';font-weight:400;font-display:swap;src:url('/fonts/DejaVuSans.ttf') format('truetype')}" +
     "@font-face{font-family:'DejaVu Sans';font-weight:700;font-display:swap;src:url('/fonts/DejaVuSans-Bold.ttf') format('truetype')}" +
     // consistent accent focus ring across targets (GTK/win32 use 2px #0066cc); only
@@ -42,13 +48,15 @@ function injectFontFace() {
   document.head.appendChild(s);
 }
 
-// dark/light theme toggle — light is the default on every target. setTheme(dark)
-// flips the root colors (the native targets compile this to swiss_set_theme).
+// dark/light theme toggle — light is the default on every target. Flips the root
+// data-theme so token colors (var(--swiss-*)) update; the root bg/text follow the
+// bg/text tokens. Native targets compile setTheme to swiss_set_theme.
 export function setTheme(dark) {
-  const el = (typeof document !== 'undefined') && (document.getElementById('root') || document.body);
-  if (!el) return;
-  el.style.backgroundColor = dark ? '#1e1e1e' : '#ffffff';
-  el.style.color = dark ? '#e6e6e6' : '#1a1a1a';
+  if (typeof document === 'undefined') return;
+  injectFontFace();
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  const el = document.getElementById('root') || document.body;
+  if (el) { el.style.backgroundColor = 'var(--swiss-bg)'; el.style.color = 'var(--swiss-text)'; }
 }
 
 export function render(element, container, opts) {
