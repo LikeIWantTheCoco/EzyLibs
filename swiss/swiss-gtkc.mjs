@@ -133,6 +133,12 @@ function emit(ast, opts) {
       else if (k === 'justifyContent') o.justifyContent = s;
       else if (k === 'border') { if (s !== 'none') { const m = s.match(/(\d+)px\s+\w+\s+(\S+)/); if (m) { o.borderWidth = parseInt(m[1]); o.borderColor = m[2]; } } }
       else if (k === 'overflow' || k === 'overflowY') o.overflow = s;
+      else if (k === 'position') o.position = s;
+      else if (k === 'top') o.top = num(s);
+      else if (k === 'left') o.left = num(s);
+      else if (k === 'right') o.right = num(s);
+      else if (k === 'bottom') o.bottom = num(s);
+      else if (k === 'zIndex') o.zIndex = num(s);
     }
     return o;
   }
@@ -315,6 +321,21 @@ function emit(ast, opts) {
         pack(sc); return sc;
       }
       applyStyle(v, st); addClass(v);
+      // position:absolute/fixed → float over the UI via the root GtkOverlay,
+      // positioned by margins + alignment (root-relative), stacked by zIndex.
+      if (st && (st.position === 'absolute' || st.position === 'fixed')) {
+        if (st.top != null) out.build.push(`  gtk_widget_set_margin_top(${v}, ${Number(st.top)});`);
+        if (st.left != null) out.build.push(`  gtk_widget_set_margin_start(${v}, ${Number(st.left)});`);
+        if (st.right != null) out.build.push(`  gtk_widget_set_margin_end(${v}, ${Number(st.right)});`);
+        if (st.bottom != null) out.build.push(`  gtk_widget_set_margin_bottom(${v}, ${Number(st.bottom)});`);
+        const ha = (st.left != null && st.right != null) ? 'FILL' : (st.right != null && st.left == null) ? 'END' : 'START';
+        const va = (st.top != null && st.bottom != null) ? 'FILL' : (st.bottom != null && st.top == null) ? 'END' : 'START';
+        out.build.push(`  gtk_widget_set_halign(${v}, GTK_ALIGN_${ha}); gtk_widget_set_valign(${v}, GTK_ALIGN_${va});`);
+        const ovf = vid('ov'); stateFields.push(`  GtkWidget* ${ovf};`);
+        out.build.push(`  s->${ovf} = ${v};`);
+        (out.overlays || (out.overlays = [])).push({ field: ovf, z: (st.zIndex || 0) });
+        return v;   // not packed into the parent — added to the root overlay in main()
+      }
       pack(v); return v;
     }
     if (name === 'ScrollView') {
@@ -885,7 +906,11 @@ ${refs.map((r) => `  S.${r.name}__current = ${r.cinit};`).join('\n')}
   gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(_rootsc), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
   gtk_widget_set_vexpand(_root, TRUE); gtk_widget_set_valign(_root, GTK_ALIGN_FILL);
   gtk_container_add(GTK_CONTAINER(_rootsc), _root);
-  gtk_container_add(GTK_CONTAINER(win), _rootsc);
+${(out.overlays && out.overlays.length)
+  ? `  GtkWidget* _ov = gtk_overlay_new();\n  gtk_container_add(GTK_CONTAINER(_ov), _rootsc);\n` +
+    out.overlays.slice().sort((a, b) => a.z - b.z).map((o) => `  gtk_overlay_add_overlay(GTK_OVERLAY(_ov), S.${o.field});`).join('\n') +
+    `\n  gtk_container_add(GTK_CONTAINER(win), _ov);`
+  : `  gtk_container_add(GTK_CONTAINER(win), _rootsc);`}
   gtk_widget_show_all(win);
   swiss_effect(&S);
   gtk_main();

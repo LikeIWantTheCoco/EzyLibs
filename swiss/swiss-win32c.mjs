@@ -106,6 +106,12 @@ function emit(ast, opts) {
       else if (k === 'gap') o.gap = num(s);
       else if (k === 'alignItems') o.alignItems = s;
       else if (k === 'justifyContent') o.justifyContent = s;
+      else if (k === 'position') o.position = s;
+      else if (k === 'top') o.top = num(s);
+      else if (k === 'left') o.left = num(s);
+      else if (k === 'right') o.right = num(s);
+      else if (k === 'bottom') o.bottom = num(s);
+      else if (k === 'zIndex') o.zIndex = num(s);
     }
     return o;
   }
@@ -185,7 +191,16 @@ function emit(ast, opts) {
     const bordercol = _bc != null ? colorref(_bc) : null;
     const opacity = st && st.opacity != null && st.opacity < 1 ? Math.max(0, st.opacity) : 1;
     const overflow = st && (st.overflow === 'auto' || st.overflow === 'scroll') ? 1 : 0;
-    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross, radius, shadow, borderw, bordercol, opacity, overflow };
+    // position:absolute/fixed → out of flex flow, placed at top/left/right/bottom
+    // (root-relative), stacked by zIndex. UNSET sides use the sentinel -1000000.
+    const NS = -1000000;
+    const abspos = st && (st.position === 'absolute' || st.position === 'fixed') ? 1 : 0;
+    const atop = st && st.top != null ? Number(st.top) : NS;
+    const aleft = st && st.left != null ? Number(st.left) : NS;
+    const aright = st && st.right != null ? Number(st.right) : NS;
+    const abottom = st && st.bottom != null ? Number(st.bottom) : NS;
+    const zindex = st && st.zIndex ? Number(st.zIndex) : 0;
+    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross, radius, shadow, borderw, bordercol, opacity, overflow, abspos, atop, aleft, aright, abottom, zindex };
   }
   // apply font + text color to a freshly created control hwnd expr
   function applyControl(hw, st, kind, scope) {
@@ -277,6 +292,7 @@ function emit(ast, opts) {
       if (na.bordercol != null) out.build.push(`  ${nv}->hasborder = 1; ${nv}->bordercol = ${na.bordercol}; ${nv}->borderw = SC(${na.borderw || 1});`);
       if (na.opacity < 1) out.build.push(`  ${nv}->alpha = ${Math.round(na.opacity * 255)};`);
       if (na.overflow) out.build.push(`  ${nv}->overflow = 1;`);
+      if (na.abspos) out.build.push(`  ${nv}->abspos = 1; ${nv}->atop = ${na.atop === -1000000 ? '-1000000' : `SC(${na.atop})`}; ${nv}->aleft = ${na.aleft === -1000000 ? '-1000000' : `SC(${na.aleft})`}; ${nv}->aright = ${na.aright === -1000000 ? '-1000000' : `SC(${na.aright})`}; ${nv}->abottom = ${na.abottom === -1000000 ? '-1000000' : `SC(${na.abottom})`}; ${nv}->zindex = ${na.zindex};`);
       if (na.mt || na.mb || na.ml || na.mr) out.build.push(`  ${nv}->mt = SC(${na.mt}); ${nv}->mb = SC(${na.mb}); ${nv}->ml = SC(${na.ml}); ${nv}->mr = SC(${na.mr});`);
     };
     // control height: explicit height wins; else derive from vertical padding +
@@ -790,6 +806,7 @@ typedef struct Node {
   int overflow, scrolly, contenth;   // overflow:auto/scroll → vertical scroll offset + content height
   COLORREF bg; int hasbg, visible;
   int bgtok;                 // theme token+1 for the background (0 = use bg literal) — resolved at paint
+  int abspos, atop, aleft, aright, abottom, zindex;   // position:absolute (root-relative) + z-order
 } Node;
 
 static HINSTANCE g_hinst;
@@ -851,7 +868,7 @@ static void swiss_measure(Node* n, int* mw, int* mh) {
   if (n->hwnd) { swiss_measure_leaf(n, mw, mh); return; }
   int main = 0, cross = 0, vis = 0;
   for (int i = 0; i < n->nkids; i++) {
-    Node* k = n->kids[i]; if (!k->visible) continue;
+    Node* k = n->kids[i]; if (!k->visible || k->abspos) continue;
     int cw, ch; swiss_measure(k, &cw, &ch);
     int cm = (n->dir ? cw : ch) + (n->dir ? k->ml + k->mr : k->mt + k->mb);  // + main-axis margins
     int cc = (n->dir ? ch : cw) + (n->dir ? k->mt + k->mb : k->ml + k->mr);  // + cross-axis margins
@@ -903,7 +920,7 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
   int avail = n->dir ? iw : ih;
   int used = 0, vis = 0, totflex = 0;
   for (int i = 0; i < n->nkids; i++) {
-    Node* k = n->kids[i]; if (!k->visible) continue;
+    Node* k = n->kids[i]; if (!k->visible || k->abspos) continue;
     int cw, ch; swiss_measure(k, &cw, &ch);
     used += (n->dir ? cw : ch) + (n->dir ? k->ml + k->mr : k->mt + k->mb);  // + main-axis margins
     vis++; totflex += k->flex;
@@ -927,7 +944,7 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
   int cursor = n->dir ? ix : (iy - scroff);
   if (!totflex) { if (n->justify == 1) cursor += extra / 2; else if (n->justify == 2) cursor += extra; }
   for (int i = 0; i < n->nkids; i++) {
-    Node* c = n->kids[i]; if (!c->visible) continue;
+    Node* c = n->kids[i]; if (!c->visible || c->abspos) continue;
     int cw, ch; swiss_measure(c, &cw, &ch);
     int cm = n->dir ? cw : ch, cc = n->dir ? ch : cw;
     if (c->flex && totflex) cm += extra * c->flex / totflex;
@@ -965,6 +982,39 @@ static Node* swiss_scroll_hit(Node* n, int px, int py) {
   if (n->overflow && px >= n->rx && px < n->rx + n->rw && py >= n->ry && py < n->ry + n->rh) return n;
   return NULL;
 }
+// ── position:absolute (root-relative) + z-order ──
+static Node* g_absnodes[64]; static int g_nabs;
+static void swiss_collect_abs(Node* n) {
+  for (int i = 0; i < n->nkids; i++) { Node* c = n->kids[i]; if (!c->visible) continue;
+    if (c->abspos && g_nabs < 64) g_absnodes[g_nabs++] = c; swiss_collect_abs(c); }
+}
+static void swiss_arrange_abs(Node* n, int W, int H) {
+  for (int i = 0; i < n->nkids; i++) {
+    Node* c = n->kids[i]; if (!c->visible) continue;
+    if (c->abspos) {
+      int mw, mh; swiss_measure(c, &mw, &mh);
+      int NS = -1000000, w = mw, h = mh, x = 0, y = 0;
+      if (c->aleft != NS && c->aright != NS) { x = c->aleft; w = W - c->aleft - c->aright; }
+      else if (c->aleft != NS) x = c->aleft;
+      else if (c->aright != NS) x = W - c->aright - w;
+      if (c->atop != NS && c->abottom != NS) { y = c->atop; h = H - c->atop - c->abottom; }
+      else if (c->atop != NS) y = c->atop;
+      else if (c->abottom != NS) y = H - c->abottom - h;
+      if (c->w >= 0) w = c->w; if (c->h >= 0) h = c->h;
+      swiss_arrange(c, x, y, w, h);
+    }
+    swiss_arrange_abs(c, W, H);
+  }
+}
+static void swiss_raise_subtree(Node* n) {
+  if (n->hwnd) SetWindowPos(n->hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  for (int i = 0; i < n->nkids; i++) swiss_raise_subtree(n->kids[i]);
+}
+static void swiss_zorder_abs(void) {   // raise absolute subtrees, lowest zIndex first (highest ends on top)
+  for (int i = 1; i < g_nabs; i++) { Node* k = g_absnodes[i]; int j = i - 1;
+    while (j >= 0 && g_absnodes[j]->zindex > k->zindex) { g_absnodes[j + 1] = g_absnodes[j]; j--; } g_absnodes[j + 1] = k; }
+  for (int i = 0; i < g_nabs; i++) swiss_raise_subtree(g_absnodes[i]);
+}
 static void swiss_relayout(void) {
   if (!g_root || !g_main) return;
   RECT rc; GetClientRect(g_main, &rc);
@@ -975,6 +1025,8 @@ static void swiss_relayout(void) {
   int rx = 0;
   if (rw < W) { if (g_root->selfalign == 1) rx = (W - rw) / 2; else if (g_root->selfalign == 2) rx = W - rw; }
   swiss_arrange(g_root, rx, 0, rw, rh);
+  swiss_arrange_abs(g_root, W, H);   // position:absolute nodes (root-relative), out of flow
+  g_nabs = 0; swiss_collect_abs(g_root); swiss_zorder_abs();   // stack absolute subtrees by zIndex
   // repaint backgrounds (WM_PAINT double-buffers; erase suppressed) so vacated
   // areas clear without the full-white-flash flicker of an erasing invalidate
   InvalidateRect(g_main, NULL, FALSE);
@@ -1083,7 +1135,7 @@ static void swiss_paint_bg(Node* n, HDC hdc) {
     RECT tr = { sbx, ty, sbx + sbw, ty + th };
     swiss_fill_round(hdc, tr, sbw / 2, C2A(RGB(193, 197, 203)), 0, 0);
   }
-  for (int i = 0; i < n->nkids; i++) if (n->kids[i]->visible) swiss_paint_bg(n->kids[i], hdc);
+  for (int i = 0; i < n->nkids; i++) if (n->kids[i]->visible && !n->kids[i]->abspos) swiss_paint_bg(n->kids[i], hdc);
 }
 // soft rounded border around inputs (drawn behind the inset EDIT), accent when focused
 static HWND g_focus;
@@ -1096,7 +1148,7 @@ static void swiss_paint_frames(Node* n, HDC hdc) {
     int foc = (n->hwnd == g_focus) && !hidefocus;
     swiss_fill_round(hdc, r, n->radius, C2A(swiss_tok(${TOKENS.indexOf('card')})), foc ? C2A(RGB(0, 102, 204)) : C2A(swiss_tok(${TOKENS.indexOf('border')})), foc ? 2.0f : 1.0f);
   }
-  for (int i = 0; i < n->nkids; i++) if (n->kids[i]->visible) swiss_paint_frames(n->kids[i], hdc);
+  for (int i = 0; i < n->nkids; i++) if (n->kids[i]->visible && !n->kids[i]->abspos) swiss_paint_frames(n->kids[i], hdc);
 }
 
 // ── owner-drawn buttons: GDI+ antialiased rounded fill on the panel bg behind ──
@@ -1375,7 +1427,8 @@ ${cmdCases || '      break;'}
       HBITMAP bmp = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
       HGDIOBJ ob = SelectObject(mem, bmp);
       FillRect(mem, &rc, g_white);
-      if (g_root) { swiss_paint_bg(g_root, mem); swiss_paint_frames(g_root, mem); }   // View bg + input borders
+      if (g_root) { swiss_paint_bg(g_root, mem); swiss_paint_frames(g_root, mem);   // View bg + input borders
+        for (int i = 0; i < g_nabs; i++) { swiss_paint_bg(g_absnodes[i], mem); swiss_paint_frames(g_absnodes[i], mem); } }   // absolute overlays on top (zIndex order)
       BitBlt(hdc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
       SelectObject(mem, ob); DeleteObject(bmp); DeleteDC(mem);
       EndPaint(hwnd, &ps); return 0;
