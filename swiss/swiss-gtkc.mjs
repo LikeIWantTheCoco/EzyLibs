@@ -876,7 +876,14 @@ ${refs.map((r) => `  S.${r.name}__current = ${r.cinit};`).join('\n')}
   gtk_window_maximize(GTK_WINDOW(win));
   gtk_window_set_default_size(GTK_WINDOW(win), 900, 600);
   g_signal_connect(win, "destroy", G_CALLBACK(gtk_main_quit), NULL);
-  gtk_container_add(GTK_CONTAINER(win), swiss_build_ui(&S));
+  // page scroll: wrap the root so it scrolls when its content exceeds the window
+  // (like the web body). vexpand keeps it filling the window when content fits.
+  GtkWidget* _root = swiss_build_ui(&S);
+  GtkWidget* _rootsc = gtk_scrolled_window_new(NULL, NULL);
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(_rootsc), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+  gtk_widget_set_vexpand(_root, TRUE); gtk_widget_set_valign(_root, GTK_ALIGN_FILL);
+  gtk_container_add(GTK_CONTAINER(_rootsc), _root);
+  gtk_container_add(GTK_CONTAINER(win), _rootsc);
   gtk_widget_show_all(win);
   swiss_effect(&S);
   gtk_main();

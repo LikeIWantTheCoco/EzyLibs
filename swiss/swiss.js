@@ -34,7 +34,11 @@ function injectFontFace() {
   const s = document.createElement('style');
   s.textContent =
     "@font-face{font-family:'DejaVu Sans';font-weight:400;font-display:swap;src:url('/fonts/DejaVuSans.ttf') format('truetype')}" +
-    "@font-face{font-family:'DejaVu Sans';font-weight:700;font-display:swap;src:url('/fonts/DejaVuSans-Bold.ttf') format('truetype')}";
+    "@font-face{font-family:'DejaVu Sans';font-weight:700;font-display:swap;src:url('/fonts/DejaVuSans-Bold.ttf') format('truetype')}" +
+    // consistent accent focus ring across targets (GTK/win32 use 2px #0066cc); only
+    // on keyboard focus (:focus-visible), suppressed for mouse clicks.
+    "button:focus,input:focus,select:focus,textarea:focus{outline:none}" +
+    "button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #0066cc;outline-offset:1px}";
   document.head.appendChild(s);
 }
 
@@ -63,7 +67,8 @@ export function render(element, container, opts) {
 
 export { ezy } from './swiss-bridge.js';
 export { native } from './swiss-native.js';   // the ONE native API (web backend)
-export { View, Text, Button, Input, FlatList, ScrollView } from './swiss-components.js';
+export { View, Text, Button, Input, FlatList, ScrollView,
+  Checkbox, Switch, Slider, Select, TextArea, ProgressBar, Image, Separator } from './swiss-components.js';
 export { StyleSheet } from './swiss-stylesheet.js';
 
 import { native } from './swiss-native.js';

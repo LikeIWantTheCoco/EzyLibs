@@ -892,6 +892,7 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
     int maxs = used - avail; if (maxs < 0) maxs = 0;
     if (n->scrolly > maxs) n->scrolly = maxs; if (n->scrolly < 0) n->scrolly = 0;
     scroff = n->scrolly;
+    if (used > avail) iw -= SC(8);   // reserve a scrollbar gutter so children clear the thumb
     RECT vp = { x, y, x + w, y + h };
     if (g_clipping) IntersectRect(&g_clip, &clipSave, &vp); else g_clip = vp;
     g_clipping = 1;
@@ -1030,6 +1031,15 @@ static void swiss_paint_bg(Node* n, HDC hdc) {
       ARGB bord = n->hasborder ? (((ARGB)a << 24) | (C2A(n->bordercol) & 0xFFFFFFu)) : 0;
       swiss_fill_round(hdc, r, n->radius, fill, bord, n->hasborder ? (float)n->borderw : 0.0f);
     }
+  }
+  // overflow scrollbar thumb (rounded gray, in the reserved right gutter)
+  if (n->overflow && n->contenth > n->rh && n->rh > 0) {
+    int sbw = SC(6), sbx = n->rx + n->rw - sbw - SC(2);
+    int th = (int)((long long)n->rh * n->rh / n->contenth); if (th < SC(24)) th = SC(24); if (th > n->rh) th = n->rh;
+    int maxs = n->contenth - n->rh;
+    int ty = n->ry + (maxs > 0 ? (n->rh - th) * n->scrolly / maxs : 0);
+    RECT tr = { sbx, ty, sbx + sbw, ty + th };
+    swiss_fill_round(hdc, tr, sbw / 2, C2A(RGB(193, 197, 203)), 0, 0);
   }
   for (int i = 0; i < n->nkids; i++) if (n->kids[i]->visible) swiss_paint_bg(n->kids[i], hdc);
 }
@@ -1366,6 +1376,7 @@ ${refs.map((r) => `  S.${r.name}__current = ${r.cinit};`).join('\n')}
   g_main = CreateWindowExA(0, "SwissWindow", ${cstr(opts.title || 'Swiss')},
     WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, SC(960), SC(640), NULL, NULL, hi, NULL);
   g_root = swiss_build_ui(&S);
+  if (g_root) g_root->overflow = 1;   // page scroll when content exceeds the window (like the web body)
   swiss_effect(&S);
   swiss_relayout();
   ShowWindow(g_main, show); UpdateWindow(g_main);

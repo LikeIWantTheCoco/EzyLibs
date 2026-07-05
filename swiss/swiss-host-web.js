@@ -15,7 +15,17 @@ const TAG = {
   'swiss-text': 'span',
   'swiss-button': 'button',
   'swiss-input': 'input',
+  'swiss-checkbox': 'label',   // <label><input type=checkbox> text</label>
+  'swiss-switch': 'label',
+  'swiss-slider': 'input',      // type=range
+  'swiss-select': 'select',
+  'swiss-textarea': 'textarea',
+  'swiss-progress': 'progress',
+  'swiss-image': 'img',
+  'swiss-separator': 'hr',
 };
+// widgets that are a <label> wrapping a real control + a text node
+const WRAP = { 'swiss-checkbox': 'checkbox', 'swiss-switch': 'checkbox' };
 
 // default layout per primitive (matches RN/Yoga: View is a flex column)
 function applyDefaults(type, el) {
@@ -37,37 +47,55 @@ function applyDefaults(type, el) {
     el.style.color = 'inherit';
     el.style.cursor = 'pointer';
     el.style.padding = '0';
-    el.style.outline = 'none';   // no black focus box; JSX/focus styling can re-add
+    // focus ring is styled globally (accent, matching GTK/win32) — see swiss.js
   }
 }
+
+// wrapped widgets keep the real control on el._input; others act on el itself
+const ctrlOf = (type, el) => (WRAP[type] ? el._input : el);
 
 // (re)apply props to a DOM node. Events are assigned as properties so a second
 // pass overwrites cleanly (no listener leaks).
 function applyProps(type, el, props) {
-  el.onclick = null;
-  el.oninput = null;
+  const c = ctrlOf(type, el);
+  c.onclick = null; c.oninput = null; c.onchange = null;
   for (const key in props) {
     if (key === 'children' || key === 'key' || key === 'ref') continue;
     const v = props[key];
     if (key === 'style') {
-      // defaults first, user style wins
-      el.removeAttribute('style');
-      applyDefaults(type, el);
-      Object.assign(el.style, styleToCss(v));
+      el.removeAttribute('style'); applyDefaults(type, el); Object.assign(el.style, styleToCss(v));
     } else if (key === 'onPress') {
-      el.onclick = (e) => { e.preventDefault(); v && v(e); };
+      c.onclick = (e) => { e.preventDefault(); v && v(e); };
     } else if (key === 'onChange') {
-      el.oninput = (e) => v && v(e.target.value);
+      if (type === 'swiss-checkbox' || type === 'swiss-switch') c.onchange = (e) => v && v(e.target.checked);
+      else if (type === 'swiss-slider') c.oninput = (e) => v && v(Number(e.target.value));
+      else if (type === 'swiss-select') c.onchange = (e) => v && v(e.target.selectedIndex);
+      else c.oninput = (e) => v && v(e.target.value);
     } else if (key === 'value') {
-      el.value = v == null ? '' : String(v);
+      if (type === 'swiss-checkbox' || type === 'swiss-switch') c.checked = !!v;
+      else if (type === 'swiss-select') c.selectedIndex = Number(v) || 0;
+      else if (type === 'swiss-progress') c.value = Number(v) || 0;
+      else c.value = v == null ? '' : String(v);
+    } else if (key === 'checked') {
+      c.checked = !!v;
+    } else if (key === 'min' || key === 'max') {
+      c[key] = v;
+    } else if (key === 'options') {
+      c.innerHTML = '';
+      (v || []).forEach((o) => { const op = document.createElement('option'); op.textContent = String(o && typeof o === 'object' ? (o.label != null ? o.label : o.value) : o); c.appendChild(op); });
+      if (props.value != null) c.selectedIndex = Number(props.value) || 0;
+    } else if (key === 'label') {
+      if (el._label) el._label.textContent = ' ' + v;
     } else if (key === 'placeholder') {
-      el.placeholder = v;
+      c.placeholder = v;
+    } else if (key === 'src' && type === 'swiss-image') {
+      c.src = v;
     } else if (key === 'title' && type === 'swiss-button') {
       el.textContent = v;
     } else if (key === 'keyboardType') {
-      el.type = v === 'numeric' ? 'number' : 'text';
+      c.type = v === 'numeric' ? 'number' : 'text';
     } else if (key === 'disabled') {
-      el.disabled = !!v;
+      c.disabled = !!v;
     }
   }
   if (!('style' in props)) applyDefaults(type, el);
@@ -105,6 +133,15 @@ export const hostConfig = {
   createInstance(type, props) {
     const tag = TAG[type] || 'div';
     const el = document.createElement(tag);
+    if (WRAP[type]) {   // <label><input type=checkbox> labeltext</label>
+      const inp = document.createElement('input'); inp.type = 'checkbox';
+      const lbl = document.createTextNode('');
+      el.appendChild(inp); el.appendChild(lbl);
+      el._input = inp; el._label = lbl;
+      el.style.display = 'inline-flex'; el.style.alignItems = 'center'; el.style.gap = '6px'; el.style.cursor = 'pointer';
+    } else if (type === 'swiss-slider') {
+      el.type = 'range';
+    }
     applyProps(type, el, props);
     if (type === 'swiss-text' && (typeof props.children === 'string' || typeof props.children === 'number'))
       el.textContent = String(props.children);
