@@ -851,6 +851,8 @@ static void swiss_set_theme(long long dark) {
     " entry, button, combobox { border-radius:4px; min-height:0; transition:120ms; }"
     " button { border:none; box-shadow:none; background-image:none; text-shadow:none; }"
     " button:hover, button:active { background-image:none; }"
+    " button:hover { box-shadow: inset 0 0 0 200px rgba(0,0,0,0.06); }"      // subtle darken on hover (webview-like feedback)
+    " button:active { box-shadow: inset 0 0 0 200px rgba(0,0,0,0.12); }"
     " entry { padding:4px 8px; border:1px solid @swiss_border; }"
     " entry:focus { border-color:@swiss_primary; }"
     " button:focus, entry:focus, combobox:focus { outline-color:@swiss_primary; outline-style:solid; outline-width:2px; }"

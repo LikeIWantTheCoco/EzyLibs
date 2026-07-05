@@ -1166,6 +1166,8 @@ static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
     COLORREF tbg = g_btns[i].bgtok ? swiss_tok(g_btns[i].bgtok - 1) : g_btns[i].bg;
     COLORREF tbehind = g_btns[i].behindtok ? swiss_tok(g_btns[i].behindtok - 1) : g_btns[i].behind;
     COLORREF bg = plain ? (g_darktheme ? RGB(58, 64, 72) : RGB(245, 246, 248)) : tbg;   // light/dark surface for plain buttons
+    if (d->itemState & ODS_SELECTED) bg = swiss_darken(bg, 86);        // pressed
+    else if (d->itemState & ODS_HOTLIGHT) bg = swiss_darken(bg, 93);   // subtle hover feedback (webview-like)
     // flat like JSX/web: the button color is static (no hover/press shading — the
     // JSX styles declare no :hover, so the fill stays constant like the DOM)
     // paint the panel color behind first (no window region — GDI+ AA rounds it)

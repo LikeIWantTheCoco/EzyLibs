@@ -59,6 +59,7 @@ const ctrlOf = (type, el) => (WRAP[type] ? el._input : el);
 function applyProps(type, el, props) {
   const c = ctrlOf(type, el);
   c.onclick = null; c.oninput = null; c.onchange = null;
+  c.onmouseenter = null; c.onmouseleave = null; c.onfocus = null; c.onblur = null;
   for (const key in props) {
     if (key === 'children' || key === 'key' || key === 'ref') continue;
     const v = props[key];
@@ -66,6 +67,14 @@ function applyProps(type, el, props) {
       el.removeAttribute('style'); applyDefaults(type, el); Object.assign(el.style, styleToCss(v));
     } else if (key === 'onPress') {
       c.onclick = (e) => { e.preventDefault(); v && v(e); };
+    } else if (key === 'onMouseEnter' || key === 'onHoverIn') {
+      c.onmouseenter = (e) => v && v(e);
+    } else if (key === 'onMouseLeave' || key === 'onHoverOut') {
+      c.onmouseleave = (e) => v && v(e);
+    } else if (key === 'onFocus') {
+      c.onfocus = (e) => v && v(e);
+    } else if (key === 'onBlur') {
+      c.onblur = (e) => v && v(e);
     } else if (key === 'onChange') {
       if (type === 'swiss-checkbox' || type === 'swiss-switch') c.onchange = (e) => v && v(e.target.checked);
       else if (type === 'swiss-slider') c.oninput = (e) => v && v(Number(e.target.value));
