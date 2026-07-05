@@ -849,6 +849,8 @@ static void swiss_set_theme(long long dark) {
   // The placeholder's theme-named color (often an accent) is redefined to muted.
   const char* shape =
     " entry, button, combobox { border-radius:4px; min-height:0; transition:120ms; }"
+    // smooth reactive-style swaps: animate color/background/opacity changes
+    " label, button, box, entry, combobox { transition: background-color 160ms ease, color 160ms ease, opacity 160ms ease, border-color 160ms ease; }"
     " button { border:none; box-shadow:none; background-image:none; text-shadow:none; }"
     " button:hover, button:active { background-image:none; }"
     " button:hover { box-shadow: inset 0 0 0 200px rgba(0,0,0,0.06); }"      // subtle darken on hover (webview-like feedback)

@@ -1115,11 +1115,41 @@ static int swiss_get_bg(HWND w, COLORREF* c, HBRUSH* b) {
   }
   return 0;
 }
-// ── reactive restyle: a style={cond?A:B} whose test reads state re-applies its
-// color props when the cell changes, then repaints ONLY that control (no
-// relayout, no flicker). Colors are the flicker-free subset that changes.
-static void swiss_restyle_color(HWND w, COLORREF c) { for (int i = 0; i < g_ncolors; i++) if (g_colors[i].w == w) { g_colors[i].c = c; g_colors[i].tok = 0; } InvalidateRect(w, NULL, FALSE); }
-static void swiss_restyle_bg(HWND w, COLORREF c) { for (int i = 0; i < g_nbgs; i++) if (g_bgs[i].w == w) { if (g_bgs[i].b) DeleteObject(g_bgs[i].b); g_bgs[i].b = CreateSolidBrush(c); g_bgs[i].c = c; g_bgs[i].tok = 0; } InvalidateRect(w, NULL, FALSE); }
+// ── reactive restyle (+ smooth transition): a style={cond?A:B} whose test reads
+// state re-applies its color props when the cell changes, animating old→new over
+// ~160ms via a timer and repainting ONLY that control (no relayout, no flicker).
+#define SWISS_ANIM_MS 160
+static COLORREF swiss_lerp(COLORREF a, COLORREF b, int pct) {
+  return RGB(GetRValue(a) + (GetRValue(b) - GetRValue(a)) * pct / 100,
+             GetGValue(a) + (GetGValue(b) - GetGValue(a)) * pct / 100,
+             GetBValue(a) + (GetBValue(b) - GetBValue(a)) * pct / 100);
+}
+static void swiss_apply_c(HWND w, int kind, COLORREF c) {   // write the current color into the registry
+  if (kind == 0) { for (int i = 0; i < g_ncolors; i++) if (g_colors[i].w == w) { g_colors[i].c = c; g_colors[i].tok = 0; } }
+  else { for (int i = 0; i < g_nbgs; i++) if (g_bgs[i].w == w) { if (g_bgs[i].b) DeleteObject(g_bgs[i].b); g_bgs[i].b = CreateSolidBrush(c); g_bgs[i].c = c; g_bgs[i].tok = 0; } }
+}
+static struct { HWND w; COLORREF from, to; DWORD start; int kind, active; } g_anim[64]; static int g_nanim;
+static void swiss_anim(HWND w, int kind, COLORREF to) {
+  COLORREF from = 0; if (kind == 0) { for (int i = 0; i < g_ncolors; i++) if (g_colors[i].w == w) from = g_colors[i].c; }
+  else { for (int i = 0; i < g_nbgs; i++) if (g_bgs[i].w == w) from = g_bgs[i].c; }
+  if (from == to) return;
+  int i; for (i = 0; i < g_nanim; i++) if (g_anim[i].w == w && g_anim[i].kind == kind) break;
+  if (i == g_nanim) { if (g_nanim >= 64) { swiss_apply_c(w, kind, to); InvalidateRect(w, NULL, FALSE); return; } g_nanim++; }
+  g_anim[i].w = w; g_anim[i].from = from; g_anim[i].to = to; g_anim[i].start = GetTickCount(); g_anim[i].kind = kind; g_anim[i].active = 1;
+  SetTimer(g_main, 0x5A11, 15, NULL);
+}
+static void swiss_anim_tick(void) {
+  DWORD now = GetTickCount(); int any = 0;
+  for (int i = 0; i < g_nanim; i++) if (g_anim[i].active) {
+    int pct = (int)((now - g_anim[i].start) * 100 / SWISS_ANIM_MS);
+    if (pct >= 100) { pct = 100; g_anim[i].active = 0; } else any = 1;
+    swiss_apply_c(g_anim[i].w, g_anim[i].kind, swiss_lerp(g_anim[i].from, g_anim[i].to, pct));
+    InvalidateRect(g_anim[i].w, NULL, FALSE);
+  }
+  if (!any) { KillTimer(g_main, 0x5A11); g_nanim = 0; }
+}
+static void swiss_restyle_color(HWND w, COLORREF c) { swiss_anim(w, 0, c); }
+static void swiss_restyle_bg(HWND w, COLORREF c) { swiss_anim(w, 1, c); }
 
 static HBRUSH g_white;   // themeable window/control background brush
 static COLORREF g_bgcol = RGB(255, 255, 255), g_fgcol = RGB(26, 26, 26);   // light default
@@ -1446,6 +1476,7 @@ ${cmdCases || '      break;'}
       return 0;
     }
     case WM_TIMER: {
+      if ((UINT_PTR)wp == 0x5A11) { swiss_anim_tick(); return 0; }   // reactive color transitions
       for (int i = 0; i < g_ntimers; i++) if (g_timers[i].id == (UINT_PTR)wp) { if (!g_timers[i].repeat) KillTimer(hwnd, (UINT_PTR)wp); g_timers[i].cb(&S); break; }
       return 0;
     }
