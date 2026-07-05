@@ -397,7 +397,12 @@ function emit(ast, opts) {
       const isSubmit = strAttr(a.type) === 'submit' && scope.__form;
       if (!press && isSubmit) press = scope.__form;
       const id = press ? command(emitHandler(press, scope, 'click'), 'BN_CLICKED') : 0;
-      const hw = vid('w');
+      // a reactive style={cond?A:B} button is stored in state so its restyle dep
+      // (which runs in swiss_update_*) can reach it.
+      const btnReactive = st && st.__cond && cellsIn(st.__cond.test).size && !scope.__inrow;
+      let hw, hwDecl;
+      if (btnReactive) { const f = vid('btn'); stateFields.push(`  HWND ${f};`); hw = `s->${f}`; hwDecl = ''; }
+      else { hw = vid('w'); hwDecl = 'HWND '; }
       // every button is owner-drawn (GDI+ AA rounded) for a consistent flat,
       // modern look — colored from backgroundColor/color, or a light surface +
       // border when plain. (No BS_DEFPUSHBUTTON: owner-draw can't be the default.)
@@ -405,8 +410,16 @@ function emit(ast, opts) {
       const bgCol = bgTk >= 0 ? '0' : colorref(st && st.backgroundColor), fgCol = fgTk >= 0 ? '0' : colorref(st && st.color);
       const behTk = (scope && scope.__bgtok != null) ? scope.__bgtok : -1;
       const behind = behTk >= 0 ? '0' : ((scope && scope.__bg) || 'g_bgcol');
-      out.build.push(`  HWND ${hw} = CreateWindowExA(0, "BUTTON", ${cstr(label)}, WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
+      out.build.push(`  ${hwDecl}${hw} = CreateWindowExA(0, "BUTTON", ${cstr(label)}, WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_TABSTOP, 0, 0, 0, 0, g_main, (HMENU)(INT_PTR)${id}, g_hinst, NULL);`);
       out.build.push(`  swiss_btn_style(${hw}, ${bgCol || '0'}, ${(bgCol || bgTk >= 0) ? 1 : 0}, ${fgCol || '0'}, ${(fgCol || fgTk >= 0) ? 1 : 0}, SC(${na.radius || 6}), ${behind}, ${bgTk + 1}, ${fgTk + 1}, ${behTk + 1});`);
+      // reactive button background: animate on the cell change (via swiss_restyle_btn)
+      if (btnReactive) { const cnd = st.__cond;
+        if (cnd.a.backgroundColor || cnd.b.backgroundColor) {
+          const cc = (x) => tokIdx(x) >= 0 ? `swiss_tok(${tokIdx(x)})` : (colorref(x) || 'RGB(0,0,0)');
+          const snip = `swiss_restyle_btn(${hw}, (${cexpr(cnd.test, scope).c}) ? ${cc(cnd.a.backgroundColor)} : ${cc(cnd.b.backgroundColor)});`;
+          cellsIn(cnd.test).forEach((cn) => deps[cn] && deps[cn].push(snip));
+        }
+      }
       if (scope.__index) out.build.push(`  SetWindowLongPtrA(${hw}, GWLP_USERDATA, (LONG_PTR)${scope.__index.c});`);
       if (dynTitle) {
         const tv = cexpr(dynTitle, scope);
@@ -1124,14 +1137,11 @@ static COLORREF swiss_lerp(COLORREF a, COLORREF b, int pct) {
              GetGValue(a) + (GetGValue(b) - GetGValue(a)) * pct / 100,
              GetBValue(a) + (GetBValue(b) - GetBValue(a)) * pct / 100);
 }
-static void swiss_apply_c(HWND w, int kind, COLORREF c) {   // write the current color into the registry
-  if (kind == 0) { for (int i = 0; i < g_ncolors; i++) if (g_colors[i].w == w) { g_colors[i].c = c; g_colors[i].tok = 0; } }
-  else { for (int i = 0; i < g_nbgs; i++) if (g_bgs[i].w == w) { if (g_bgs[i].b) DeleteObject(g_bgs[i].b); g_bgs[i].b = CreateSolidBrush(c); g_bgs[i].c = c; g_bgs[i].tok = 0; } }
-}
+static void swiss_apply_c(HWND w, int kind, COLORREF c);   // fwd (g_btns defined later)
 static struct { HWND w; COLORREF from, to; DWORD start; int kind, active; } g_anim[64]; static int g_nanim;
+static COLORREF swiss_cur_c(HWND w, int kind);   // fwd
 static void swiss_anim(HWND w, int kind, COLORREF to) {
-  COLORREF from = 0; if (kind == 0) { for (int i = 0; i < g_ncolors; i++) if (g_colors[i].w == w) from = g_colors[i].c; }
-  else { for (int i = 0; i < g_nbgs; i++) if (g_bgs[i].w == w) from = g_bgs[i].c; }
+  COLORREF from = swiss_cur_c(w, kind);
   if (from == to) return;
   int i; for (i = 0; i < g_nanim; i++) if (g_anim[i].w == w && g_anim[i].kind == kind) break;
   if (i == g_nanim) { if (g_nanim >= 64) { swiss_apply_c(w, kind, to); InvalidateRect(w, NULL, FALSE); return; } g_nanim++; }
@@ -1217,6 +1227,19 @@ static void swiss_btn_style(HWND w, COLORREF bg, int hasbg, COLORREF fg, int has
     g_btns[g_nbtns].fg = fg; g_btns[g_nbtns].hasfg = hasfg; g_btns[g_nbtns].radius = radius; g_btns[g_nbtns].behind = behind;
     g_btns[g_nbtns].bgtok = bgtok; g_btns[g_nbtns].fgtok = fgtok; g_btns[g_nbtns].behindtok = behindtok; g_nbtns++; }
 }
+// current/apply color for the animation system (kind 0=text 1=view/static-bg 2=button-bg)
+static COLORREF swiss_cur_c(HWND w, int kind) {
+  if (kind == 0) { for (int i = 0; i < g_ncolors; i++) if (g_colors[i].w == w) return g_colors[i].c; }
+  else if (kind == 1) { for (int i = 0; i < g_nbgs; i++) if (g_bgs[i].w == w) return g_bgs[i].c; }
+  else { for (int i = 0; i < g_nbtns; i++) if (g_btns[i].w == w) return g_btns[i].bg; }
+  return 0;
+}
+static void swiss_apply_c(HWND w, int kind, COLORREF c) {
+  if (kind == 0) { for (int i = 0; i < g_ncolors; i++) if (g_colors[i].w == w) { g_colors[i].c = c; g_colors[i].tok = 0; } }
+  else if (kind == 1) { for (int i = 0; i < g_nbgs; i++) if (g_bgs[i].w == w) { if (g_bgs[i].b) DeleteObject(g_bgs[i].b); g_bgs[i].b = CreateSolidBrush(c); g_bgs[i].c = c; g_bgs[i].tok = 0; } }
+  else { for (int i = 0; i < g_nbtns; i++) if (g_btns[i].w == w) { g_btns[i].bg = c; g_btns[i].hasbg = 1; g_btns[i].bgtok = 0; } }
+}
+static void swiss_restyle_btn(HWND w, COLORREF bg) { swiss_anim(w, 2, bg); }
 static COLORREF swiss_darken(COLORREF c, int pct) { return RGB(GetRValue(c)*pct/100, GetGValue(c)*pct/100, GetBValue(c)*pct/100); }
 static int swiss_btn_draw(LPDRAWITEMSTRUCT d) {
   for (int i = 0; i < g_nbtns; i++) if (g_btns[i].w == d->hwndItem) {
