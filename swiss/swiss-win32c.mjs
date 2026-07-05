@@ -235,6 +235,21 @@ function emit(ast, opts) {
       if (bgTokF >= 0) out.build.push(`  swiss_set_bg_tok(${hw}, ${bgTokF + 1});`);
       else if (bg) out.build.push(`  swiss_set_bg(${hw}, ${bg});`);
     }
+    // reactive style={cond ? A : B}: when the test reads state cells (and the
+    // control is stored in state so deps can reach it), re-apply the differing
+    // color props on change and repaint just this control (no relayout → no flicker)
+    if (cnd && hw.startsWith('s->') && !(scope && scope.__inrow)) {
+      const rcells = cellsIn(cnd.test);
+      const cc = (x) => tokIdx(x) >= 0 ? `swiss_tok(${tokIdx(x)})` : (colorref(x) || 'RGB(0,0,0)');
+      const test = cexpr(cnd.test, scope || {}).c;
+      const snips = [];
+      if (cnd.a.color || cnd.b.color) snips.push(`swiss_restyle_color(${hw}, (${test}) ? ${cc(cnd.a.color)} : ${cc(cnd.b.color)});`);
+      if (kind === 'text' && (cnd.a.backgroundColor || cnd.b.backgroundColor)) {
+        const bcc = (x) => x ? cc(x) : ((scope && scope.__bg) || 'g_bgcol');
+        snips.push(`swiss_restyle_bg(${hw}, (${test}) ? ${bcc(cnd.a.backgroundColor)} : ${bcc(cnd.b.backgroundColor)});`);
+      }
+      if (snips.length) rcells.forEach((cn) => deps[cn] && deps[cn].push(snips.join(' ')));
+    }
   }
 
   // text children → an snprintf snippet writing into a control's text
@@ -360,6 +375,15 @@ function emit(ast, opts) {
         const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(`s->${f}`)};`); selfStep(n); pack(n); return n;
       }
       const stx = st && st.textTransform === 'uppercase' ? info.staticText.toUpperCase() : st && st.textTransform === 'lowercase' ? info.staticText.toLowerCase() : info.staticText;
+      // static text but a reactive style={cond?A:B} → store the control in state so
+      // the restyle deps (which run in swiss_update_*) can reach it.
+      const reactiveStyle = st && st.__cond && cellsIn(st.__cond.test).size && !scope.__inrow;
+      if (reactiveStyle) {
+        const f = vid('lbl'); stateFields.push(`  HWND ${f};`);
+        out.build.push(`  s->${f} = CreateWindowExA(0, "STATIC", ${cstr(stx)}, WS_CHILD | WS_VISIBLE | ${sstyle}, 0, 0, 0, 0, g_main, NULL, g_hinst, NULL);`);
+        applyControl(`s->${f}`, st, 'text', scope); regPill(`s->${f}`);
+        const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(`s->${f}`)};`); selfStep(n); pack(n); return n;
+      }
       const hw = ctl('"STATIC"', sstyle, cstr(stx), 'text');
       applyControl(hw, st, 'text', scope); regPill(hw);
       const n = vid('n'); out.build.push(`  Node* ${n} = ${mkNode(hw)};`); selfStep(n); pack(n); return n;
@@ -1091,6 +1115,11 @@ static int swiss_get_bg(HWND w, COLORREF* c, HBRUSH* b) {
   }
   return 0;
 }
+// ── reactive restyle: a style={cond?A:B} whose test reads state re-applies its
+// color props when the cell changes, then repaints ONLY that control (no
+// relayout, no flicker). Colors are the flicker-free subset that changes.
+static void swiss_restyle_color(HWND w, COLORREF c) { for (int i = 0; i < g_ncolors; i++) if (g_colors[i].w == w) { g_colors[i].c = c; g_colors[i].tok = 0; } InvalidateRect(w, NULL, FALSE); }
+static void swiss_restyle_bg(HWND w, COLORREF c) { for (int i = 0; i < g_nbgs; i++) if (g_bgs[i].w == w) { if (g_bgs[i].b) DeleteObject(g_bgs[i].b); g_bgs[i].b = CreateSolidBrush(c); g_bgs[i].c = c; g_bgs[i].tok = 0; } InvalidateRect(w, NULL, FALSE); }
 
 static HBRUSH g_white;   // themeable window/control background brush
 static COLORREF g_bgcol = RGB(255, 255, 255), g_fgcol = RGB(26, 26, 26);   // light default
