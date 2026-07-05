@@ -301,7 +301,10 @@ function emit(ast, opts) {
       else if (bg) out.build.push(`  ${v}->bg = ${bg}; ${v}->hasbg = 1;`);
       // propagate the effective panel background to descendants so their text
       // controls paint opaque on the right color (no transparency → no flicker)
-      let childScope = { ...scope, __bg: bg || scope.__bg, __bgtok: bgTok >= 0 ? bgTok : (scope && scope.__bgtok) };
+      // token bg → children inherit that token; a FIXED (hex) bg overrides with a
+      // literal so descendants don't wrongly inherit an ancestor's token behind.
+      let childScope = { ...scope, __bg: bg || scope.__bg,
+        __bgtok: bgTok >= 0 ? bgTok : (bg ? -1 : (scope && scope.__bgtok)) };
       if (tag === 'form' && a.onSubmit) childScope.__form = a.onSubmit;
       buildChildren(el.children, v, childScope);
       selfStep(v); pack(v); return v;
@@ -505,7 +508,7 @@ function emit(ast, opts) {
       out.build.push(`  s->${box} = swiss_view(0, ${na.pad}, ${na.gap || 6}, ${na.flex}, ${na.w}, ${na.h}, ${na.justify}, 3);`);
       const rowFn = `swiss_row_${out.lists.length}`;
       const rebuildFn = `swiss_list_rebuild_${out.lists.length}`;
-      out.lists.push({ box, rowFn, rebuildFn, itemFn, idxName, countCell, bg: st && colorref(st.backgroundColor) || scope.__bg });
+      out.lists.push({ box, rowFn, rebuildFn, itemFn, idxName, countCell, bg: st && colorref(st.backgroundColor) || scope.__bg, bgtok: (st && tokIdx(st.backgroundColor) >= 0) ? tokIdx(st.backgroundColor) : scope.__bgtok });
       if (countCell) deps[countCell.name].push(`${rebuildFn}(s);`);
       pack(`s->${box}`); return `s->${box}`;
     }
@@ -543,7 +546,7 @@ function emit(ast, opts) {
     const box = vid('map'); stateFields.push(`  Node* ${box};`);
     out.build.push(`  s->${box} = swiss_view(0, 0, 6, 0, -1, -1, 0, 3);`);
     if (parent) out.build.push(`  swiss_add(${parent}, s->${box});`);
-    out.lists.push({ kind: 'map', box, rowFn: `swiss_map_${out.lists.length}`, rebuildFn: `swiss_maprebuild_${out.lists.length}`, itemJSX, itName, idxParam, cell, filterArrow, bg: scope.__bg });
+    out.lists.push({ kind: 'map', box, rowFn: `swiss_map_${out.lists.length}`, rebuildFn: `swiss_maprebuild_${out.lists.length}`, itemJSX, itName, idxParam, cell, filterArrow, bg: scope.__bg, bgtok: scope.__bgtok });
     const L = out.lists[out.lists.length - 1];
     const reads = cellsIn(itemJSX); reads.add(cell.name);
     if (filterArrow) cellsIn(filterArrow.body).forEach((c) => reads.add(c));
@@ -635,6 +638,7 @@ function emit(ast, opts) {
         jsx = L.itemFn.body; countC = L.countCell ? 's->' + L.countCell.name : '0';
       }
       if (L.bg) rowScope.__bg = L.bg;   // rows inherit the list container's panel bg (opaque text)
+      if (L.bgtok != null && L.bgtok >= 0) rowScope.__bgtok = L.bgtok;   // …and its theme token so row text re-themes
       const rootVar = build(stripParens(jsx), null, rowScope);
       const rowBody = out.build; out.build = saved;
       out.fns.push(`static Node* ${L.rowFn}(SwissState* s, long long ${idxVar}) {\n${rowBody.join('\n')}\n  return ${rootVar};\n}`);
