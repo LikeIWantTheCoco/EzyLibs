@@ -309,6 +309,24 @@ function emit(ast, opts) {
       if (na.overflow) out.build.push(`  ${nv}->overflow = 1;`);
       if (na.abspos) out.build.push(`  ${nv}->abspos = 1; ${nv}->atop = ${na.atop === -1000000 ? '-1000000' : `SC(${na.atop})`}; ${nv}->aleft = ${na.aleft === -1000000 ? '-1000000' : `SC(${na.aleft})`}; ${nv}->aright = ${na.aright === -1000000 ? '-1000000' : `SC(${na.aright})`}; ${nv}->abottom = ${na.abottom === -1000000 ? '-1000000' : `SC(${na.abottom})`}; ${nv}->zindex = ${na.zindex};`);
       if (na.mt || na.mb || na.ml || na.mr) out.build.push(`  ${nv}->mt = SC(${na.mt}); ${nv}->mb = SC(${na.mb}); ${nv}->ml = SC(${na.ml}); ${nv}->mr = SC(${na.mr});`);
+      // reactive LAYOUT: style={cond?A:B} that differs in size/spacing → update the
+      // node's layout fields on the cell change and relayout (double-buffered → no flash).
+      if (st && st.__cond && !scope.__inrow && cellsIn(st.__cond.test).size) {
+        const A = st.__cond.a, B = st.__cond.b;
+        const num = (o, k) => (o && o[k] != null) ? Number(o[k]) : null;
+        const specs = [['width', 'w', 1, -1], ['height', 'h', 1, -1], ['padding', 'pad', 1, 0], ['gap', 'gap', 1, 0],
+          ['marginTop', 'mt', 1, 0], ['marginBottom', 'mb', 1, 0], ['marginLeft', 'ml', 1, 0], ['marginRight', 'mr', 1, 0], ['flex', 'flex', 0, 0]];
+        const val = (o, key, sc, unset) => { const n = num(o, key); if (n == null) return String(unset); return sc ? `SC(${n})` : String(n); };
+        const test = cexpr(st.__cond.test, scope).c;
+        const sets = [];
+        for (const [key, fld, sc, unset] of specs) if (num(A, key) !== num(B, key)) sets.push([fld, `(${test}) ? ${val(A, key, sc, unset)} : ${val(B, key, sc, unset)}`]);
+        if (sets.length) {
+          const rf = vid('rl'); stateFields.push(`  Node* ${rf};`);
+          out.build.push(`  s->${rf} = ${nv};`);
+          const snip = sets.map(([fld, expr]) => `s->${rf}->${fld} = ${expr};`).join(' ') + ' swiss_relayout();';
+          cellsIn(st.__cond.test).forEach((cn) => deps[cn] && deps[cn].push(snip));
+        }
+      }
     };
     // control height: explicit height wins; else derive from vertical padding +
     // font size (the browser/GTK box model — Win32 controls have no CSS padding,
