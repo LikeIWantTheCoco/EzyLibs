@@ -1094,7 +1094,7 @@ static void swiss_paint_frames(Node* n, HDC hdc) {
     // when Windows has hidden focus cues (mouse-driven UI).
     int hidefocus = (int)(SendMessageW(g_main, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS);
     int foc = (n->hwnd == g_focus) && !hidefocus;
-    swiss_fill_round(hdc, r, n->radius, C2A(g_bgcol), foc ? C2A(RGB(0, 102, 204)) : C2A(n->framecol), foc ? 2.0f : 1.0f);
+    swiss_fill_round(hdc, r, n->radius, C2A(swiss_tok(${TOKENS.indexOf('card')})), foc ? C2A(RGB(0, 102, 204)) : C2A(swiss_tok(${TOKENS.indexOf('border')})), foc ? 2.0f : 1.0f);
   }
   for (int i = 0; i < n->nkids; i++) if (n->kids[i]->visible) swiss_paint_frames(n->kids[i], hdc);
 }
@@ -1388,6 +1388,13 @@ ${cmdCases || '      break;'}
       // WS_CLIPCHILDREN suppress repaint flicker
       if (swiss_get_bg((HWND)lp, &bgc, &bgb)) { SetBkColor(dc, bgc); SetBkMode(dc, OPAQUE); return (LRESULT)bgb; }
       SetBkColor(dc, g_bgcol); SetBkMode(dc, OPAQUE); return (LRESULT)g_white;
+    }
+    case WM_CTLCOLOREDIT: {   // inputs use the themed "card" surface (else system white → wrong in dark)
+      HDC dc = (HDC)wp; SetTextColor(dc, g_fgcol);
+      COLORREF c = swiss_tok(${TOKENS.indexOf('card')});
+      static HBRUSH eb; static COLORREF ec;
+      if (!eb || ec != c) { if (eb) DeleteObject(eb); eb = CreateSolidBrush(c); ec = c; }
+      SetBkColor(dc, c); return (LRESULT)eb;
     }
     case WM_SIZE: swiss_relayout(); return 0;
     case WM_UPDATEUISTATE: InvalidateRect(hwnd, NULL, FALSE); break;   // focus-cue visibility changed → redraw indicators
