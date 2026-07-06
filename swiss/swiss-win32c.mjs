@@ -309,22 +309,30 @@ function emit(ast, opts) {
       if (na.overflow) out.build.push(`  ${nv}->overflow = 1;`);
       if (na.abspos) out.build.push(`  ${nv}->abspos = 1; ${nv}->atop = ${na.atop === -1000000 ? '-1000000' : `SC(${na.atop})`}; ${nv}->aleft = ${na.aleft === -1000000 ? '-1000000' : `SC(${na.aleft})`}; ${nv}->aright = ${na.aright === -1000000 ? '-1000000' : `SC(${na.aright})`}; ${nv}->abottom = ${na.abottom === -1000000 ? '-1000000' : `SC(${na.abottom})`}; ${nv}->zindex = ${na.zindex};`);
       if (na.mt || na.mb || na.ml || na.mr) out.build.push(`  ${nv}->mt = SC(${na.mt}); ${nv}->mb = SC(${na.mb}); ${nv}->ml = SC(${na.ml}); ${nv}->mr = SC(${na.mr});`);
-      // reactive LAYOUT: style={cond?A:B} that differs in size/spacing → update the
-      // node's layout fields on the cell change and relayout (double-buffered → no flash).
+      // reactive LAYOUT + APPEARANCE: style={cond?A:B} differing in size/spacing
+      // (→ relayout) and/or radius/opacity/border (→ repaint just this node's rect).
       if (st && st.__cond && !scope.__inrow && cellsIn(st.__cond.test).size) {
         const A = st.__cond.a, B = st.__cond.b;
         const num = (o, k) => (o && o[k] != null) ? Number(o[k]) : null;
-        const specs = [['width', 'w', 1, -1], ['height', 'h', 1, -1], ['padding', 'pad', 1, 0], ['gap', 'gap', 1, 0],
-          ['marginTop', 'mt', 1, 0], ['marginBottom', 'mb', 1, 0], ['marginLeft', 'ml', 1, 0], ['marginRight', 'mr', 1, 0], ['flex', 'flex', 0, 0]];
         const val = (o, key, sc, unset) => { const n = num(o, key); if (n == null) return String(unset); return sc ? `SC(${n})` : String(n); };
         const test = cexpr(st.__cond.test, scope).c;
-        const sets = [];
-        for (const [key, fld, sc, unset] of specs) if (num(A, key) !== num(B, key)) sets.push([fld, `(${test}) ? ${val(A, key, sc, unset)} : ${val(B, key, sc, unset)}`]);
+        const layout = [['width', 'w', 1, -1], ['height', 'h', 1, -1], ['padding', 'pad', 1, 0], ['gap', 'gap', 1, 0],
+          ['marginTop', 'mt', 1, 0], ['marginBottom', 'mb', 1, 0], ['marginLeft', 'ml', 1, 0], ['marginRight', 'mr', 1, 0], ['flex', 'flex', 0, 0]];
+        const sets = []; let relayout = false;
+        for (const [key, fld, sc, unset] of layout) if (num(A, key) !== num(B, key)) { sets.push([fld, `(${test}) ? ${val(A, key, sc, unset)} : ${val(B, key, sc, unset)}`]); relayout = true; }
+        if (num(A, 'borderRadius') !== num(B, 'borderRadius')) sets.push(['radius', `(${test}) ? ${val(A, 'borderRadius', 1, 0)} : ${val(B, 'borderRadius', 1, 0)}`]);
+        if (num(A, 'opacity') !== num(B, 'opacity')) { const al = (o) => { const n = num(o, 'opacity'); return (n == null || n >= 1) ? '255' : String(Math.round(n * 255)); }; sets.push(['alpha', `(${test}) ? ${al(A)} : ${al(B)}`]); }
+        // border (explicit or `1px solid X` shorthand)
+        const bcol = (o) => { if (o.borderColor) return o.borderColor; if (o.border && o.border !== 'none') { const m = String(o.border).match(/\d+px\s+\w+\s+(\S+)/); if (m) return m[1]; } return null; };
+        const bwid = (o) => { if (o.borderWidth != null) return Number(o.borderWidth); if (o.border && o.border !== 'none') { const m = String(o.border).match(/(\d+)px/); if (m) return parseInt(m[1]); } return null; };
+        if (bwid(A) !== bwid(B)) { const w = (o) => bwid(o) == null ? '0' : `SC(${bwid(o)})`; sets.push(['borderw', `(${test}) ? ${w(A)} : ${w(B)}`]); }
+        if (bcol(A) || bcol(B)) { const bc = (x) => x ? (tokIdx(x) >= 0 ? `swiss_tok(${tokIdx(x)})` : colorref(x)) : '0'; sets.push(['bordercol', `(${test}) ? ${bc(bcol(A))} : ${bc(bcol(B))}`, 'hasborder']); }
         if (sets.length) {
           const rf = vid('rl'); stateFields.push(`  Node* ${rf};`);
           out.build.push(`  s->${rf} = ${nv};`);
-          const snip = sets.map(([fld, expr]) => `s->${rf}->${fld} = ${expr};`).join(' ') + ' swiss_relayout();';
-          cellsIn(st.__cond.test).forEach((cn) => deps[cn] && deps[cn].push(snip));
+          const assigns = sets.map(([fld, expr, extra]) => `s->${rf}->${fld} = ${expr};${extra ? ` s->${rf}->${extra} = 1;` : ''}`).join(' ');
+          const paint = relayout ? 'swiss_relayout();' : `{ RECT _r = { s->${rf}->rx, s->${rf}->ry, s->${rf}->rx + s->${rf}->rw, s->${rf}->ry + s->${rf}->rh }; InvalidateRect(g_main, &_r, FALSE); }`;
+          cellsIn(st.__cond.test).forEach((cn) => deps[cn] && deps[cn].push(assigns + ' ' + paint));
         }
       }
     };
