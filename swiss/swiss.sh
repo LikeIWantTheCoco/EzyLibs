@@ -10,7 +10,7 @@
 # in later without touching app code.
 set -e
 LIB="$HOME/.ezy/libs/swiss"
-RUNTIME="swiss.js swiss-reconciler.js swiss-host-web.js swiss-components.js swiss-stylesheet.js swiss-theme.mjs swiss-bridge.js swiss-jsx-core.mjs swiss-gtkc.mjs swiss-win32c.mjs swiss-sig.mjs swiss-winsdk.mjs swiss-winshim.c swiss-native.js"
+RUNTIME="swiss.js swiss-reconciler.js swiss-host-web.js swiss-components.js swiss-stylesheet.js swiss-theme.mjs swiss-bridge.js swiss-jsx-core.mjs swiss-c-backend.mjs swiss-gtkc.mjs swiss-win32c.mjs swiss-sig.mjs swiss-winsdk.mjs swiss-winshim.c swiss-native.js"
 
 die() { echo "swiss: $1" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
