@@ -112,6 +112,7 @@ function emit(ast, opts) {
       else if (k === 'boxShadow') o.boxShadow = s;
       else if (k === 'textAlign') o.textAlign = s;
       else if (k === 'flexDirection') o.flexDirection = s;
+      else if (k === 'flexWrap') o.flexWrap = s;
       else if (k === 'gap') o.gap = num(s);
       else if (k === 'alignItems') o.alignItems = s;
       else if (k === 'justifyContent') o.justifyContent = s;
@@ -211,7 +212,8 @@ function emit(ast, opts) {
     const zindex = st && st.zIndex ? Number(st.zIndex) : 0;
     const gradSrc = st && (st.backgroundImage || (typeof st.background === 'string' && /gradient/.test(st.background)) || (typeof st.backgroundColor === 'string' && /gradient/.test(st.backgroundColor)));
     const grad = gradSrc ? parseGradient(gradSrc) : null;
-    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross, radius, shadow, borderw, bordercol, opacity, overflow, abspos, atop, aleft, aright, abottom, zindex, grad };
+    const wrap = st && (st.flexWrap === 'wrap' || st.flexWrap === 'wrap-reverse') ? 1 : 0;
+    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross, radius, shadow, borderw, bordercol, opacity, overflow, abspos, atop, aleft, aright, abottom, zindex, grad, wrap };
   }
   // apply font + text color to a freshly created control hwnd expr
   function applyControl(hw, st, kind, scope) {
@@ -320,6 +322,7 @@ function emit(ast, opts) {
       if (na.overflow) out.build.push(`  ${nv}->overflow = 1;`);
       if (na.abspos) out.build.push(`  ${nv}->abspos = 1; ${nv}->atop = ${na.atop === -1000000 ? '-1000000' : `SC(${na.atop})`}; ${nv}->aleft = ${na.aleft === -1000000 ? '-1000000' : `SC(${na.aleft})`}; ${nv}->aright = ${na.aright === -1000000 ? '-1000000' : `SC(${na.aright})`}; ${nv}->abottom = ${na.abottom === -1000000 ? '-1000000' : `SC(${na.abottom})`}; ${nv}->zindex = ${na.zindex};`);
       if (na.grad) { const gc = (x) => tokIdx(x) >= 0 ? `swiss_tok(${tokIdx(x)})` : (colorref(x) || 'RGB(0,0,0)'); out.build.push(`  ${nv}->hasgrad = 1; ${nv}->hasbg = 1; ${nv}->gradangle = ${na.grad.angle}; ${nv}->gradc1 = ${gc(na.grad.c1)}; ${nv}->gradc2 = ${gc(na.grad.c2)};`); }
+      if (na.wrap) out.build.push(`  ${nv}->wrap = 1;`);
       if (na.mt || na.mb || na.ml || na.mr) out.build.push(`  ${nv}->mt = SC(${na.mt}); ${nv}->mb = SC(${na.mb}); ${nv}->ml = SC(${na.ml}); ${nv}->mr = SC(${na.mr});`);
       // reactive LAYOUT + APPEARANCE: style={cond?A:B} differing in size/spacing
       // (→ relayout) and/or radius/opacity/border (→ repaint just this node's rect).
@@ -908,6 +911,7 @@ typedef struct Node {
   int bgtok;                 // theme token+1 for the background (0 = use bg literal) — resolved at paint
   int abspos, atop, aleft, aright, abottom, zindex;   // position:absolute (root-relative) + z-order
   int hasgrad, gradangle; COLORREF gradc1, gradc2;    // background: linear-gradient(angle, c1, c2)
+  int wrap;                  // flexWrap → wrap row children onto new lines
 } Node;
 
 static HINSTANCE g_hinst;
@@ -967,6 +971,15 @@ static void swiss_measure_leaf(Node* n, int* mw, int* mh) {
 
 static void swiss_measure(Node* n, int* mw, int* mh) {
   if (n->hwnd) { swiss_measure_leaf(n, mw, mh); return; }
+  if (n->wrap && n->dir && n->w > 0) {   // flex-wrap: rows wrap within the fixed width → sum row heights
+    int iw = n->w - 2 * n->pad, cx = 0, rowh = 0, totalh = 0;
+    for (int i = 0; i < n->nkids; i++) { Node* c = n->kids[i]; if (!c->visible || c->abspos) continue;
+      int cw, ch; swiss_measure(c, &cw, &ch); int cmw = cw + c->ml + c->mr, cmh = ch + c->mt + c->mb;
+      if (cx > 0 && cx + cmw > iw) { totalh += rowh + n->gap; cx = 0; rowh = 0; }
+      cx += cmw + n->gap; if (cmh > rowh) rowh = cmh; }
+    totalh += rowh;
+    *mw = n->w; *mh = (n->h >= 0) ? n->h : totalh + 2 * n->pad; return;
+  }
   int main = 0, cross = 0, vis = 0;
   for (int i = 0; i < n->nkids; i++) {
     Node* k = n->kids[i]; if (!k->visible || k->abspos) continue;
@@ -1018,6 +1031,18 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
     return;
   }
   int ix = x + n->pad, iy = y + n->pad, iw = w - 2 * n->pad, ih = h - 2 * n->pad;
+  if (n->wrap && n->dir) {   // flex-wrap: place row children, wrapping onto new lines
+    int cx = ix, cy = iy, rowh = 0;
+    for (int i = 0; i < n->nkids; i++) {
+      Node* c = n->kids[i]; if (!c->visible || c->abspos) continue;
+      int cw, ch; swiss_measure(c, &cw, &ch);
+      int cmw = cw + c->ml + c->mr, cmh = ch + c->mt + c->mb;
+      if (cx > ix && cx + cmw > ix + iw) { cx = ix; cy += rowh + n->gap; rowh = 0; }
+      swiss_arrange(c, cx + c->ml, cy + c->mt, cw, ch);
+      cx += cmw + n->gap; if (cmh > rowh) rowh = cmh;
+    }
+    return;
+  }
   int avail = n->dir ? iw : ih;
   int used = 0, vis = 0, totflex = 0;
   for (int i = 0; i < n->nkids; i++) {

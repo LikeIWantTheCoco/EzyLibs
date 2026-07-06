@@ -131,6 +131,7 @@ function emit(ast, opts) {
       else if (k === 'boxShadow') o.boxShadow = s;
       else if (k === 'textAlign') o.textAlign = s;
       else if (k === 'flexDirection') o.flexDirection = s;
+      else if (k === 'flexWrap') o.flexWrap = s;
       else if (k === 'gap') o.gap = num(s);
       else if (k === 'alignItems') o.alignItems = s;
       else if (k === 'justifyContent') o.justifyContent = s;
@@ -291,7 +292,9 @@ function emit(ast, opts) {
     const HSIZE = { h1: 28, h2: 23, h3: 19, h4: 16 };
     if (HSIZE[tag]) { st = Object.assign({ fontSize: HSIZE[tag], fontWeight: 'bold' }, st || {}); cls = classForMerged('h_' + tag + '_' + (cls || 'x'), st); }
     const expand = st && (st.flex || st.flexGrow) ? 'TRUE' : 'FALSE';
-    const pack = (v, force) => { if (parent) out.build.push(`  gtk_box_pack_start(GTK_BOX(${parent}), ${v}, ${force || expand}, ${force || expand}, 0);`); };
+    const pack = (v, force) => { if (!parent) return;
+      if (scope && scope.__flow) out.build.push(`  gtk_container_add(GTK_CONTAINER(${parent}), ${v});`);   // flex-wrap: FlowBox wraps each child
+      else out.build.push(`  gtk_box_pack_start(GTK_BOX(${parent}), ${v}, ${force || expand}, ${force || expand}, 0);`); };
     const dyn = planDynStyle(a.style, scope);   // reactive style: cond ? a : b / [base, cond && x]
     const addClass = (v) => {
       if (cls) out.build.push(`  gtk_style_context_add_class(gtk_widget_get_style_context(${v}), "${cls}");`);
@@ -309,6 +312,16 @@ function emit(ast, opts) {
     if (name === 'View' || name === 'Tab') {
       const v = vid('v');
       const dir = st && st.flexDirection === 'row' ? 'GTK_ORIENTATION_HORIZONTAL' : 'GTK_ORIENTATION_VERTICAL';
+      // flexWrap:'wrap' → a GtkFlowBox that wraps children onto new lines
+      if (st && (st.flexWrap === 'wrap' || st.flexWrap === 'wrap-reverse')) {
+        const gp = Number((st && st.gap) || 0);
+        out.build.push(`  GtkWidget* ${v} = gtk_flow_box_new();`);
+        out.build.push(`  gtk_orientable_set_orientation(GTK_ORIENTABLE(${v}), ${dir});`);
+        out.build.push(`  gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(${v}), GTK_SELECTION_NONE); gtk_flow_box_set_homogeneous(GTK_FLOW_BOX(${v}), FALSE);`);
+        out.build.push(`  gtk_flow_box_set_column_spacing(GTK_FLOW_BOX(${v}), ${gp}); gtk_flow_box_set_row_spacing(GTK_FLOW_BOX(${v}), ${gp}); gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(${v}), 1000);`);
+        buildChildren(el.children, v, { ...scope, __flow: true });
+        applyStyle(v, st); addClass(v); pack(v); return v;
+      }
       out.build.push(`  GtkWidget* ${v} = gtk_box_new(${dir}, ${Number((st && st.gap) || 0)});`);
       // <form onSubmit={h}>: children inputs/submit-buttons trigger h
       const childScope = tag === 'form' && a.onSubmit ? { ...scope, __form: a.onSubmit } : scope;
