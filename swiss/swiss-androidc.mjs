@@ -92,9 +92,9 @@ function emit(ast, opts) {
     }
     return o;
   }
-  function resolveStyle(node) {
-    if (!node || node.type !== 'JSXExpressionContainer') return null;
-    const e = node.expression;
+  // resolve a style expression (styles.x / [styles.a, styles.b] / inline {{…}}) to an object
+  function styleOf(e) {
+    if (!e) return null;
     if (e.type === 'ObjectExpression') return parseInline(e);
     const names = [];
     if (e.type === 'MemberExpression' && e.object.name === 'styles') names.push(e.property.name);
@@ -102,6 +102,26 @@ function emit(ast, opts) {
       for (const el of e.elements) if (el && el.type === 'MemberExpression' && el.object.name === 'styles') names.push(el.property.name);
     if (!names.length) return null;
     return Object.assign({}, ...names.map((n) => styles[n] || {}));
+  }
+  // style={...}. Also handles `cond ? styles.a : styles.b`: props that differ
+  // between branches become runtime-conditional (color/bg via a Kotlin `if`).
+  // In a rebuilt .map row that's per-row; elsewhere it's applied once at build
+  // time (live reactive style is still a documented gap).
+  function resolveStyle(node, scope) {
+    if (!node || node.type !== 'JSXExpressionContainer') return null;
+    const e = node.expression;
+    if (e.type === 'ConditionalExpression') {
+      const a = styleOf(e.consequent) || {}, b = styleOf(e.alternate) || {};
+      const test = cexpr(e.test, scope || {}).c;
+      const merged = {};
+      for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+        if (a[k] === b[k]) merged[k] = a[k];
+        else if (k === 'color' || k === 'backgroundColor') merged[k] = { __if: test, t: a[k], f: b[k] };
+        else merged[k] = a[k] !== undefined ? a[k] : b[k];
+      }
+      return merged;
+    }
+    return styleOf(e);
   }
 
   // ── apply a style object to a just-created view `v` (emits Kotlin lines) ──
@@ -111,17 +131,21 @@ function emit(ast, opts) {
     const t = st.paddingTop ?? st.padding ?? 0, b = st.paddingBottom ?? st.padding ?? 0;
     if (l || r || t || b) P(`  ${v}.setPadding(dp(${l}), dp(${t}), dp(${r}), dp(${b}))`);
   }
+  // a color value → a Kotlin Int expression; a {__if} marker becomes a conditional
+  const colorExpr = (val) => (val && typeof val === 'object' && val.__if)
+    ? `(if (${val.__if}) swissColor(${cstr(col(val.t))}) else swissColor(${cstr(col(val.f))}))`
+    : `swissColor(${cstr(col(val))})`;
   // background: rounded/bordered → a GradientDrawable; otherwise a flat color
   function applyBackground(v, st) {
     const hasShape = st.borderRadius != null || st.borderWidth != null;
     if (hasShape) {
       P(`  ${v}.background = GradientDrawable().apply {`);
-      if (st.backgroundColor) P(`    setColor(swissColor(${cstr(col(st.backgroundColor))}))`);
+      if (st.backgroundColor) P(`    setColor(${colorExpr(st.backgroundColor)})`);
       if (st.borderRadius != null) P(`    cornerRadius = dp(${Number(st.borderRadius)}).toFloat()`);
-      if (st.borderWidth != null) P(`    setStroke(dp(${Number(st.borderWidth)}), swissColor(${cstr(col(st.borderColor || '#000000'))}))`);
+      if (st.borderWidth != null) P(`    setStroke(dp(${Number(st.borderWidth)}), ${colorExpr(st.borderColor || '#000000')})`);
       P(`  }`);
     } else if (st.backgroundColor) {
-      P(`  ${v}.setBackgroundColor(swissColor(${cstr(col(st.backgroundColor))}))`);
+      P(`  ${v}.setBackgroundColor(${colorExpr(st.backgroundColor)})`);
     }
   }
   // common non-text style (background, padding, opacity)
@@ -134,7 +158,7 @@ function emit(ast, opts) {
   // text style (color, size, weight, align, transform) on a TextView-typed var
   function applyText(v, st) {
     if (!st) return;
-    if (st.color) P(`  ${v}.setTextColor(swissColor(${cstr(col(st.color))}))`);
+    if (st.color) P(`  ${v}.setTextColor(${colorExpr(st.color)})`);
     if (st.fontSize != null) P(`  ${v}.textSize = ${Number(st.fontSize)}f`);   // sp
     if (st.fontWeight === 'bold' || Number(st.fontWeight) >= 600) P(`  ${v}.setTypeface(${v}.typeface, Typeface.BOLD)`);
     if (st.fontStyle === 'italic') P(`  ${v}.setTypeface(${v}.typeface, Typeface.ITALIC)`);
@@ -214,7 +238,7 @@ function emit(ast, opts) {
       input: 'Input', textarea: 'TextArea', button: 'Button', img: 'Image', hr: 'Separator', select: 'Select',
     };
     const name = HTMLMAP[tag] || tag;
-    let st = resolveStyle(a.style);
+    let st = resolveStyle(a.style, scope);
     const HSIZE = { h1: 28, h2: 23, h3: 19, h4: 16 };
     if (HSIZE[tag]) st = Object.assign({ fontSize: HSIZE[tag], fontWeight: 'bold' }, st || {});
     const parentH = !!(scope && scope.__parentHorizontal);
@@ -326,8 +350,15 @@ function emit(ast, opts) {
           P(`  })`);
         }
       }
-      applyCommon(`s.${f}!!`, st); applyText(`s.${f}!!`, st);
-      if (parent) { pack(`s.${f}!!`, st, parentH, crossStretch); P(`  ${parent}.addView(s.${f})`); }
+      // a text field gets a default bordered box (like GTK's entry) — fill only
+      // the props the style didn't set, so the user's style still wins.
+      const ist = Object.assign({}, st);
+      if (ist.backgroundColor == null) ist.backgroundColor = 'card';
+      if (ist.borderWidth == null) { ist.borderWidth = 1; if (ist.borderColor == null) ist.borderColor = 'border'; }
+      if (ist.borderRadius == null) ist.borderRadius = 4;
+      if (ist.padding == null && ist.paddingLeft == null && ist.paddingTop == null) ist.padding = 8;
+      applyCommon(`s.${f}!!`, ist); applyText(`s.${f}!!`, ist);
+      if (parent) { pack(`s.${f}!!`, ist, parentH, crossStretch); P(`  ${parent}.addView(s.${f})`); }
       return `s.${f}`;
     }
     if (name === 'Switch') {
