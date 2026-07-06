@@ -49,6 +49,11 @@ export const ktBackend = {
   localType(t) { return this.type(t); },     // Kotlin bool already Boolean via type()
   strLit: (s) => kstr(s),
   boolLit: (v) => (v ? 'true' : 'false'),
+  // integer literals must be Long (cells are Long); Kotlin won't widen an Int
+  // *expression* to Long, so spell every integer literal with the L suffix.
+  numLit: (v) => (Number.isInteger(v) ? `${v}L` : String(v)),
+  // Kotlin conditions demand a real Boolean — coerce a non-bool test value.
+  truthy: (code, t) => (t === 'bool' ? code : t === 'string' ? `(${code}).isNotEmpty()` : t === 'float' ? `(${code} != 0.0)` : `(${code} != 0L)`),
   nullRef: () => 'null',
 
   // ── value access ──
@@ -117,23 +122,26 @@ export const ktBackend = {
   timerAdd: (delayCode, id, repeat) => `swissTimerAdd(${delayCode}, ::${id}, ${repeat ? 'true' : 'false'})`,
   timerClear: (code) => `swissTimerClear(${code})`,
 
-  // ── statements (each returns one line, 2-space indent, no C semicolons) ──
-  declStmt: (type, name, valCode) => `  var ${name}: ${type} = ${valCode}`,
+  // ── statements (each returns one line, 2-space indent) ──
+  // Semicolons are appended even though Kotlin makes them optional: the core
+  // concatenates two statements on one line in a couple of spots (handlerBody,
+  // the memo recompute), and Kotlin needs a `;` between them there.
+  declStmt: (type, name, valCode) => `  var ${name}: ${type} = ${valCode};`,
   ifOpen(condCode) { this._blocks.push(null); return `  if (${condCode}) {`; },
   elseOpen: () => '  } else {',                 // stays within the same if-frame
   blockClose() {
     const b = this._blocks.pop();
     if (b && b.when) { const pre = b.armOpen ? '  }\n' : ''; return `${pre}  }`; }
-    if (b && b.update) return `  ${b.update}\n  }`;   // C-style for: emit the update, then close
+    if (b && b.update) return `  ${b.update};\n  }`;   // C-style for: emit the update, then close
     return '  }';
   },
   // In a `when` arm a source `break` is redundant (no fallthrough) → drop it.
   // In a real loop it's a Kotlin `break`. Disambiguate via the block stack.
   breakStmt() {
     const top = this._blocks[this._blocks.length - 1];
-    return (top && top.when) ? '' : '  break';
+    return (top && top.when) ? '' : '  break;';
   },
-  continueStmt: () => '  continue',
+  continueStmt: () => '  continue;',
   switchOpen(discCode) { this._blocks.push({ when: true, armOpen: false }); return `  when (${discCode}) {`; },
   caseLabel(testCode) {
     const f = this._blocks[this._blocks.length - 1];
@@ -145,26 +153,26 @@ export const ktBackend = {
   // C-style for → init line + while; the update is stashed and emitted at blockClose.
   forOpen(initCode, testCode, updateCode) { this._blocks.push({ update: updateCode }); return `  ${initCode}\n  while (${testCode}) {`; },
   forInit: (name, valCode) => `var ${name} = ${valCode}`,
-  assignStmt: (lvCode, op, valCode) => `  ${lvCode} ${op} ${valCode}`,
-  updateStmt: (lvCode, op) => `  ${lvCode}${op}`,
-  exprStmt: (code) => `  ${code}`,
-  updateCall: (name) => `swissUpdate_${name}(s)`,
+  assignStmt: (lvCode, op, valCode) => `  ${lvCode} ${op} ${valCode};`,
+  updateStmt: (lvCode, op) => `  ${lvCode}${op};`,
+  exprStmt: (code) => `  ${code};`,
+  updateCall: (name) => `swissUpdate_${name}(s);`,
   updateCallStmt(name) { return `  ${this.updateCall(name)}`; },
-  setCellStmt(name, valCode) { return `  ${this.stateLValue(name)} = ${valCode}`; },
-  setFieldStmt: (cellName, field, valCode) => `  s.${cellName}.${field} = ${valCode}`,   // Kotlin strings immutable — no strdup
-  snapDecl(t, name) { return `  val _snap_${name}: ${this.localType(t)} = s.${name}`; },
+  setCellStmt(name, valCode) { return `  ${this.stateLValue(name)} = ${valCode};`; },
+  setFieldStmt: (cellName, field, valCode) => `  s.${cellName}.${field} = ${valCode};`,   // Kotlin strings immutable — no strdup
+  snapDecl(t, name) { return `  val _snap_${name}: ${this.localType(t)} = s.${name};`; },
   strDup: (code) => `(${code})`,   // no-op in Kotlin
 
   // object / array state
   objLiteral: (struct, fieldInits) => `${struct}(${fieldInits.join(', ')})`,   // data class ctor, named args
   objFieldInit: (field, valCode, isStr, present) => present ? `${field} = ${valCode}` : `${field} = ${isStr ? '""' : '0L'}`,
-  arrClear: (name) => `  s.${name}.clear()`,
-  arrPush: (name, objLitCode) => `  s.${name}.add(${objLitCode})`,
-  arrFilterInPlace: (name, iVar, predCode) => `  run { val _keep = ArrayList(s.${name}); s.${name}.clear(); for (${iVar} in 0 until _keep.size) { if (${predCode.replace(new RegExp(`s\\.${name}\\[`, 'g'), '_keep[')}) s.${name}.add(_keep[(${iVar}).toInt()]) } }`,
+  arrClear: (name) => `  s.${name}.clear();`,
+  arrPush: (name, objLitCode) => `  s.${name}.add(${objLitCode});`,
+  arrFilterInPlace: (name, iVar, predCode) => `  run { val _keep = ArrayList(s.${name}); s.${name}.clear(); for (${iVar} in 0 until _keep.size) { if (${predCode.replace(new RegExp(`s\\.${name}\\[`, 'g'), '_keep[')}) s.${name}.add(_keep[(${iVar}).toInt()]) } };`,
 
   // fn/method definitions
   methodDecl: (name, params, bodyLines) => `fun method_${name}(s: SwissState${params.length ? ', ' + params.map((p) => `${p}: Long`).join(', ') : ''}) {\n${bodyLines.join('\n')}\n}`,
-  methodCall: (name, argCodes) => `  method_${name}(s${argCodes.length ? ', ' + argCodes.join(', ') : ''})`,
+  methodCall: (name, argCodes) => `  method_${name}(s${argCodes.length ? ', ' + argCodes.join(', ') : ''});`,
   timerFn: (id, bodyLines) => `fun ${id}(s: SwissState) {\n${bodyLines.join('\n')}\n}`,
 };
 

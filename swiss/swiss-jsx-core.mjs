@@ -269,8 +269,8 @@ export function createFrontend(ast, opts) {
         let t = 'int', ctype = B.type('int'), cinit = '0', initNode = null, initObj = null, initArr = null;
         if (a) {
           if (a.type === 'StringLiteral') { t = 'string'; ctype = B.type('string'); cinit = B.strLit(a.value); }
-          else if (a.type === 'BooleanLiteral') { t = 'bool'; cinit = B.boolLit(a.value); }
-          else if (a.type === 'NumericLiteral') { if (Number.isInteger(a.value)) cinit = String(a.value); else { t = 'float'; ctype = B.type('float'); cinit = String(a.value); } }
+          else if (a.type === 'BooleanLiteral') { t = 'bool'; ctype = B.type('bool'); cinit = B.boolLit(a.value); }
+          else if (a.type === 'NumericLiteral') { if (Number.isInteger(a.value)) cinit = B.numLit(a.value); else { t = 'float'; ctype = B.type('float'); cinit = B.numLit(a.value); } }
           else if (a.type === 'ArrayExpression') { t = 'array'; ctype = null; cinit = null; initArr = a; }
           else if (a.type === 'ObjectExpression') { t = 'object'; ctype = null; cinit = null; initObj = a; }
           else {
@@ -385,7 +385,7 @@ export function createFrontend(ast, opts) {
   // ── expression → { c, t }: core decides types & dispatch; B spells the code ──
   function cexpr(node, scope) {
     switch (node.type) {
-      case 'NumericLiteral': return { c: String(node.value), t: 'int' };
+      case 'NumericLiteral': return { c: B.numLit(node.value), t: 'int' };
       case 'StringLiteral': return { c: B.strLit(node.value), t: 'string' };
       case 'BooleanLiteral': return { c: B.boolLit(node.value), t: 'bool' };
       case 'Identifier': {
@@ -428,18 +428,19 @@ export function createFrontend(ast, opts) {
       case 'ConditionalExpression': {
         const test = cexpr(node.test, scope);
         const a = cexpr(node.consequent, scope), b = cexpr(node.alternate, scope);
-        return { c: B.ternary(test.c, a.c, b.c), t: a.t === 'void' ? b.t : a.t };
+        return { c: B.ternary(B.truthy(test.c, test.t), a.c, b.c), t: a.t === 'void' ? b.t : a.t };
       }
       case 'UnaryExpression': {
         const a = cexpr(node.argument, scope);
-        if (node.operator === '!') return { c: B.not(a.c), t: 'bool' };
+        if (node.operator === '!') return { c: B.not(B.truthy(a.c, a.t)), t: 'bool' };
         if (node.operator === '-') return { c: B.neg(a.c), t: a.t };
         err(`unsupported unary '${node.operator}'`, node); break;
       }
       case 'LogicalExpression': {
         const l = cexpr(node.left, scope), r = cexpr(node.right, scope);
         if (node.operator === '??') return { c: B.coalesce(l.c, r.c), t: r.t };
-        return { c: node.operator === '&&' ? B.and(l.c, r.c) : B.or(l.c, r.c), t: 'bool' };
+        const lt = B.truthy(l.c, l.t), rt = B.truthy(r.c, r.t);
+        return { c: node.operator === '&&' ? B.and(lt, rt) : B.or(lt, rt), t: 'bool' };
       }
       case 'BinaryExpression': {
         const l = cexpr(node.left, scope), r = cexpr(node.right, scope);
@@ -539,7 +540,8 @@ export function createFrontend(ast, opts) {
       return;
     }
     if (st.type === 'IfStatement') {
-      lines.push(B.ifOpen(cexpr(st.test, scope).c));
+      const _t = cexpr(st.test, scope);
+      lines.push(B.ifOpen(B.truthy(_t.c, _t.t)));
       genStmts(st.consequent, scope, lines);
       if (st.alternate) { lines.push(B.elseOpen()); genStmts(st.alternate, scope, lines); }
       lines.push(B.blockClose());
@@ -560,12 +562,12 @@ export function createFrontend(ast, opts) {
       return;
     }
     if (st.type === 'ForStatement' || st.type === 'WhileStatement') {
-      if (st.type === 'WhileStatement') lines.push(B.whileOpen(cexpr(st.test, scope).c));
+      if (st.type === 'WhileStatement') { const _t = cexpr(st.test, scope); lines.push(B.whileOpen(B.truthy(_t.c, _t.t))); }
       else {
         const sc = { ...scope };
         let initS = '';
         if (st.init && st.init.type === 'VariableDeclaration') { const d = st.init.declarations[0]; sc[d.id.name] = { c: d.id.name, t: 'int' }; initS = B.forInit(d.id.name, cexpr(d.init, sc).c); }
-        const test = st.test ? cexpr(st.test, sc).c : B.boolLit(true);
+        const test = st.test ? (() => { const _t = cexpr(st.test, sc); return B.truthy(_t.c, _t.t); })() : B.boolLit(true);
         const upd = st.update && st.update.type === 'UpdateExpression' ? cexpr(st.update.argument, sc).c + st.update.operator : (st.update ? cexpr(st.update, sc).c : '');
         lines.push(B.forOpen(initS, test, upd));
         scope = sc;

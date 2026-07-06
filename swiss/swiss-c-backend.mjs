@@ -24,6 +24,8 @@ export const cBackend = {
   localType(t) { return this.type(t === 'bool' ? 'int' : t); },   // a local/snapshot var's declared type
   strLit: (s) => cstr(s),
   boolLit: (v) => (v ? '1' : '0'),
+  numLit: (v) => String(v),                 // numeric literal (C: as-is)
+  truthy: (code, t) => code,                // coerce to a boolean test — C: identity (any scalar is a truth value)
   nullRef: () => 'NULL',
 
   // ── value access ──
