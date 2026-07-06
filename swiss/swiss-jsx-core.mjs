@@ -75,6 +75,171 @@ function findComponent(ast, err) {
   err('no default-exported function component found');
 }
 
+// ─────────────── stateful child components (build-time inline) ───────────────
+// A custom component that declares its own useState/useEffect is inlined at
+// each *static* usage site: its state/effect/derived decls are cloned into the
+// root component's body (α-renamed with a unique per-instance prefix) and its
+// return JSX is spliced in place of <Child/>. Downstream collection, the effect
+// scan, and the JSX builder then treat the child's state as ordinary root
+// state — no per-target work. Props become injected `const <prefix>x = <caller>`
+// bindings; {children} is replaced by the caller's children. A stateful child
+// inside a dynamic .map can't be statically allocated → hard error (see PARITY).
+const SKIP_KEYS = new Set(['loc', 'start', 'end', 'leadingComments', 'trailingComments']);
+const jsxTag = (el) => (el.openingElement.name.type === 'JSXIdentifier' ? el.openingElement.name.name : null);
+const constDecl = (name, init) => ({ type: 'VariableDeclaration', kind: 'const', declarations: [{ type: 'VariableDeclarator', id: { type: 'Identifier', name }, init }] });
+const jsxHasContent = (n) => !(n.type === 'JSXText' && !n.value.trim());
+
+function renameLocals(node, names, prefix) {
+  const rn = (n) => {
+    if (!n || typeof n.type !== 'string') return;
+    if (n.type === 'Identifier') { if (names.has(n.name)) n.name = prefix + n.name; return; }
+    for (const k in n) {
+      if (SKIP_KEYS.has(k)) continue;
+      if (n.type === 'MemberExpression' && k === 'property' && !n.computed) continue;
+      if ((n.type === 'ObjectProperty' || n.type === 'ObjectMethod') && k === 'key' && !n.computed) continue;
+      if (n.type === 'JSXAttribute' && k === 'name') continue;
+      if ((n.type === 'JSXOpeningElement' || n.type === 'JSXClosingElement') && k === 'name') continue;
+      const v = n[k];
+      if (Array.isArray(v)) v.forEach(rn); else if (v && typeof v.type === 'string') rn(v);
+    }
+  };
+  rn(node);
+}
+
+// replace {children}/{props.children} with the caller's kids, at any depth —
+// including JSX nested inside expression containers ({cond && <V>{children}</V>})
+function substituteChildren(root, callerKids) {
+  const isChildrenRef = (e) => e && ((e.type === 'Identifier' && e.name === 'children') ||
+    (e.type === 'MemberExpression' && e.object.type === 'Identifier' && e.object.name === 'props' && e.property.name === 'children'));
+  const visit = (n) => {
+    if (!n || typeof n.type !== 'string') return;
+    if ((n.type === 'JSXElement' || n.type === 'JSXFragment') && n.children) {
+      const out = [];
+      for (const ch of n.children) {
+        if (ch.type === 'JSXExpressionContainer' && isChildrenRef(ch.expression)) callerKids.forEach((k) => out.push(structuredClone(k)));
+        else out.push(ch);
+      }
+      n.children = out;
+    }
+    for (const k in n) {
+      if (SKIP_KEYS.has(k)) continue;
+      const v = n[k];
+      if (Array.isArray(v)) v.forEach(visit); else if (v && typeof v.type === 'string') visit(v);
+    }
+  };
+  visit(root);
+}
+
+function inlineStatefulComponents(ast, comp, err) {
+  const returnsJSX = (fn) => {
+    const isJ = (x) => x && (x.type === 'JSXElement' || x.type === 'JSXFragment' || (x.type === 'ParenthesizedExpression' && isJ(x.expression)));
+    return fn.body.type === 'BlockStatement' ? fn.body.body.some((s) => s.type === 'ReturnStatement' && isJ(s.argument)) : isJ(fn.body);
+  };
+  const compNodes = {};
+  for (const n of ast.program.body) {
+    if (n.type === 'ExportDefaultDeclaration') continue;
+    if (n.type === 'FunctionDeclaration' && n.id && returnsJSX(n)) compNodes[n.id.name] = n;
+    if (n.type === 'VariableDeclaration')
+      for (const d of n.declarations)
+        if (d.init && (d.init.type === 'ArrowFunctionExpression' || d.init.type === 'FunctionExpression') && returnsJSX(d.init)) compNodes[d.id.name] = d.init;
+  }
+  const stateful = new Set();
+  for (const name in compNodes) {
+    let s = false;
+    walk(compNodes[name].body, (n) => { if (n.type === 'CallExpression' && n.callee.type === 'Identifier' && /^use(State|Effect|Reducer)$/.test(n.callee.name)) s = true; });
+    if (s) stateful.add(name);
+  }
+  if (!stateful.size) return;
+
+  let inst = 0;
+  const hoisted = [];
+
+  function inlineOne(node, useEl, prefix) {
+    const clone = structuredClone(node);
+    const stmts = clone.body.type === 'BlockStatement' ? clone.body.body : [{ type: 'ReturnStatement', argument: clone.body }];
+    const locals = new Set();
+    for (const st of stmts)
+      if (st.type === 'VariableDeclaration')
+        for (const d of st.declarations) {
+          if (d.id.type === 'ArrayPattern') d.id.elements.forEach((e) => e && e.type === 'Identifier' && locals.add(e.name));
+          else if (d.id.type === 'Identifier') locals.add(d.id.name);
+        }
+    const param = clone.params[0];
+    const propNames = new Set(); const defaults = {};
+    if (param && param.type === 'ObjectPattern') {
+      for (const p of param.properties) {
+        if (p.type === 'RestElement') continue;
+        propNames.add(p.key.name);
+        if (p.value && p.value.type === 'AssignmentPattern') defaults[p.key.name] = p.value.right;
+      }
+    } else if (param && param.type === 'Identifier') {
+      err(`stateful component <${jsxTag(useEl)}> must destructure its props ({ ... }); a bare \`props\` param is not supported on native targets`, useEl);
+    }
+    const a = {};
+    for (const at of useEl.openingElement.attributes || []) if (at.type === 'JSXAttribute') a[at.name.name] = at.value;
+    const callerKids = (useEl.children || []).filter(jsxHasContent);
+
+    let ret = null;
+    for (const st of stmts) if (st.type === 'ReturnStatement') ret = st.argument;
+    ret = stripParens(ret);
+    if (!ret) err(`stateful component <${jsxTag(useEl)}> must return JSX`, useEl);
+    substituteChildren(ret, callerKids);
+
+    const hoist = stmts.filter((st) => st.type !== 'ReturnStatement');
+    const allNames = new Set([...locals, ...propNames]);
+    for (const st of hoist) renameLocals(st, allNames, prefix);
+    renameLocals(ret, allNames, prefix);
+
+    for (const nm of propNames) {
+      if (nm === 'children') continue;
+      const at = a[nm];
+      let val;
+      if (at !== undefined) val = at === null ? { type: 'BooleanLiteral', value: true } : (at.type === 'JSXExpressionContainer' ? at.expression : { type: 'StringLiteral', value: at.value });
+      else if (defaults[nm]) val = defaults[nm];
+      else val = { type: 'NumericLiteral', value: 0 };
+      hoist.unshift(constDecl(prefix + nm, val));
+    }
+    hoisted.push(...hoist);
+    return ret;
+  }
+
+  // walk any node; replace stateful <Child/> wherever it appears; flip inMap at .map
+  function process(node, inMap) {
+    if (!node || typeof node.type !== 'string') return node;
+    if (node.type === 'JSXElement') {
+      const tag = jsxTag(node);
+      if (stateful.has(tag)) {
+        if (inMap) err(`stateful component <${tag}> inside .map is not supported on native targets — lift its state to the parent or give it a fixed position`, node);
+        const repl = inlineOne(compNodes[tag], node, `__c${inst++}_`);
+        return process(repl, inMap);
+      }
+      processKids(node, inMap); return node;
+    }
+    if (node.type === 'JSXFragment') { processKids(node, inMap); return node; }
+    const nextMap = inMap || (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && node.callee.property.name === 'map');
+    for (const k in node) {
+      if (SKIP_KEYS.has(k)) continue;
+      const v = node[k];
+      if (Array.isArray(v)) { for (let i = 0; i < v.length; i++) if (v[i] && typeof v[i].type === 'string') v[i] = process(v[i], nextMap); }
+      else if (v && typeof v.type === 'string') node[k] = process(v, nextMap);
+    }
+    return node;
+  }
+  function processKids(jsx, inMap) {
+    if (!jsx.children) return;
+    for (let i = 0; i < jsx.children.length; i++) jsx.children[i] = process(jsx.children[i], inMap);
+  }
+
+  // process the root component's return JSX, then prepend hoisted decls
+  if (comp.body.type === 'BlockStatement') {
+    for (const st of comp.body.body) if (st.type === 'ReturnStatement') st.argument = process(st.argument, false);
+    if (hoisted.length) { const ret = comp.body.body.findIndex((s) => s.type === 'ReturnStatement'); comp.body.body.splice(ret < 0 ? comp.body.body.length : ret, 0, ...hoisted); }
+  } else {
+    const body = process(comp.body, false);
+    comp.body = hoisted.length ? { type: 'BlockStatement', body: [...hoisted, { type: 'ReturnStatement', argument: body }] } : body;
+  }
+}
+
 // Build the shared front-end for one component. Returns a context object the
 // backend's widget builder draws on (cexpr, genStmt, the cell tables, the
 // shared `out` accumulator, etc.).
@@ -83,6 +248,7 @@ export function createFrontend(ast, opts) {
   const err = (msg, node) => { const loc = node && node.loc ? ` (line ${node.loc.start.line})` : ''; throw new Error(`${(opts && opts.tag) || 'swiss'}: ${msg}${loc}`); };
   const styles = collectStyles(ast);
   const comp = findComponent(ast, err);
+  inlineStatefulComponents(ast, comp, err);
 
   const cells = [];   // useState
   const methods = []; // helper arrows / useCallback

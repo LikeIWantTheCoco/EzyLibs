@@ -27,7 +27,9 @@ Legend: ✅ full · 🟡 partial (see note) · ❌ not yet · — n/a
 | `.map` over const/scalar array     | ✅  | ✅  | ✅   | unrolled at build time |
 | `.map` over const **object** array | ✅  | ❌  | ❌   | native needs per-item record shape |
 | Custom components (presentational) | ✅  | ✅  | ✅   | inlined; props in, no own state |
-| Custom components (**stateful**)   | ✅  | ❌  | ❌   | native flattens to one state struct |
+| Custom components (**stateful**)   | ✅  | ✅  | ✅   | static positions; each instance gets isolated state (α-renamed) |
+| Stateful child inside `.map`       | ✅  | ❌  | ❌   | native can't statically alloc per-row state → hard error |
+| Stateful child `props` (bare param)| ✅  | ❌  | ❌   | native needs destructured `{ }` props → hard error |
 
 ## Layout
 
@@ -77,11 +79,15 @@ Legend: ✅ full · 🟡 partial (see note) · ❌ not yet · — n/a
 
 ## Known native-only gaps (priority order)
 
-1. **Stateful child components** — native flattens all state into one struct;
-   a child with its own `useState` isn't isolated. Needs per-instance state.
+1. **Stateful child inside `.map`** — a static child instance gets isolated
+   state (α-renamed into the root struct), but a dynamic list can't be
+   statically allocated. Emits a clear error; lift state to the parent for now.
 2. **`.map` over const object arrays** — needs per-item record-shape inference
    so `it.name` resolves; scalar arrays already unroll.
 3. **overflow: scroll/auto** — only basic scrolling on native.
+
+Resolved: stateful child components at static positions (each usage inlined
+with per-instance state), `.map` over const scalar arrays, useEffect.
 
 ## How parity is enforced
 
