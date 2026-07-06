@@ -68,8 +68,8 @@ Legend: ✅ full · 🟡 partial (see note) · ❌ not yet · — n/a
 | opacity                     | ✅  | ✅  | ✅   | ✅     | View.alpha |
 | linear-gradient background  | ✅  | ✅  | ✅   | ❌     | android: solid fill only for now |
 | Semantic theme tokens       | ✅  | ✅  | ✅   | 🟡     | android: resolved to the light palette at build time |
-| Light / dark mode           | ✅  | ✅  | ✅   | ❌     | android: no live re-theme yet |
-| Reactive style (color/bg)   | ✅  | ✅  | ✅   | ❌     | android: not wired |
+| Light / dark mode           | ✅  | ✅  | ✅   | ✅     | android: tokens resolved at runtime; setTheme rebuilds the tree |
+| Reactive style (color/bg)   | ✅  | ✅  | ✅   | 🟡     | android: conditional colour (`cond ? a : b`) reactive; tokens flip on re-theme |
 | Reactive layout/radius/etc. | ✅  | ✅  | ✅   | ❌     | |
 | CSS transitions             | ✅  | ✅  | ✅   | ❌     | |
 | :hover                      | ✅  | ✅  | ✅   | —      | android: touch, no hover |

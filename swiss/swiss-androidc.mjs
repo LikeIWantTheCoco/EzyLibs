@@ -23,12 +23,12 @@
 //
 // Usage:  node swiss-androidc.mjs App.jsx --out MainActivity.kt [--pkg com.x.y] [--sig sig.json]
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { parse, cstr, stripParens, createFrontend, walk, THEME, isToken } from './swiss-jsx-core.mjs';
+import { parse, cstr, stripParens, createFrontend, walk, THEME, TOKENS, isToken } from './swiss-jsx-core.mjs';
 import { ktBackend } from './swiss-kt-backend.mjs';
 
-// a theme token resolves to its light-palette hex at build time (live re-theme
-// is a documented gap on this target); anything else passes through to Color.
-const col = (x) => (isToken(x) ? THEME[x][0] : x);
+// theme tokens are resolved at RUNTIME (swissToken) so they flip live on
+// setTheme; only non-token colors are baked to a literal at build time.
+const col = (x) => (isToken(x) ? THEME[x][0] : x);   // still used for the light default in a few build-time spots
 
 // ───────────────────────── emit ─────────────────────────
 function emit(ast, opts) {
@@ -116,7 +116,7 @@ function emit(ast, opts) {
       const merged = {};
       for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
         if (a[k] === b[k]) merged[k] = a[k];
-        else if (k === 'color' || k === 'backgroundColor') merged[k] = { __if: test, t: a[k], f: b[k] };
+        else if (k === 'color' || k === 'backgroundColor') merged[k] = { __if: test, t: a[k], f: b[k], cells: [...cellsIn(e.test)] };
         else merged[k] = a[k] !== undefined ? a[k] : b[k];
       }
       return merged;
@@ -131,10 +131,27 @@ function emit(ast, opts) {
     const t = st.paddingTop ?? st.padding ?? 0, b = st.paddingBottom ?? st.padding ?? 0;
     if (l || r || t || b) P(`  ${v}.setPadding(dp(${l}), dp(${t}), dp(${r}), dp(${b}))`);
   }
+  // a single color → a Kotlin Int expr: a token becomes a runtime swissToken()
+  // lookup (so it re-themes), a plain color a literal.
+  const colorCode = (x) => isToken(x) ? `swissToken(${cstr(x)})` : `swissColor(${cstr(x)})`;
   // a color value → a Kotlin Int expression; a {__if} marker becomes a conditional
   const colorExpr = (val) => (val && typeof val === 'object' && val.__if)
-    ? `(if (${val.__if}) swissColor(${cstr(col(val.t))}) else swissColor(${cstr(col(val.f))}))`
-    : `swissColor(${cstr(col(val))})`;
+    ? `(if (${val.__if}) ${colorCode(val.t)} else ${colorCode(val.f)})`
+    : colorCode(val);
+  // does a style carry a conditional color that reads state cells? (→ reactive)
+  const styleReactive = (st) => !!st && ['color', 'backgroundColor'].some((k) => st[k] && typeof st[k] === 'object' && st[k].__if && st[k].cells && st[k].cells.length);
+  // register "reapply this conditional colour" in the deps of the cells it reads,
+  // so setState repaints it (the view must be field-backed to be reachable).
+  function reactiveColorRegister(vExpr, st) {
+    if (!st) return;
+    for (const [key, setter] of [['color', 'setTextColor'], ['backgroundColor', 'setBackgroundColor']]) {
+      const val = st[key];
+      if (val && typeof val === 'object' && val.__if && val.cells) {
+        const snip = `${vExpr}.${setter}(${colorExpr(val)});`;
+        val.cells.forEach((cn) => deps[cn] && deps[cn].push(snip));
+      }
+    }
+  }
   // background: rounded/bordered → a GradientDrawable; otherwise a flat color
   function applyBackground(v, st) {
     const hasShape = st.borderRadius != null || st.borderWidth != null;
@@ -156,14 +173,18 @@ function emit(ast, opts) {
     if (st.opacity != null) P(`  ${v}.alpha = ${Number(st.opacity)}f`);
   }
   // text style (color, size, weight, align, transform) on a TextView-typed var
-  function applyText(v, st) {
-    if (!st) return;
+  function applyText(v, st, defaultAlign) {
+    st = st || {};
     if (st.color) P(`  ${v}.setTextColor(${colorExpr(st.color)})`);
     if (st.fontSize != null) P(`  ${v}.textSize = ${Number(st.fontSize)}f`);   // sp
     if (st.fontWeight === 'bold' || Number(st.fontWeight) >= 600) P(`  ${v}.setTypeface(${v}.typeface, Typeface.BOLD)`);
     if (st.fontStyle === 'italic') P(`  ${v}.setTypeface(${v}.typeface, Typeface.ITALIC)`);
-    const g = st.textAlign === 'center' ? 'Gravity.CENTER_HORIZONTAL' : st.textAlign === 'right' ? 'Gravity.END' : 'Gravity.START';
-    P(`  ${v}.gravity = ${g}`);
+    // gravity centres text within the view (needs a view wider/taller than the
+    // text — cross-stretch gives that). Buttons default to CENTER (label), plain
+    // Text keeps its natural start unless textAlign says otherwise.
+    const ta = st.textAlign || defaultAlign;
+    const g = ta === 'center' ? 'Gravity.CENTER' : ta === 'right' ? 'Gravity.END' : ta === 'left' ? 'Gravity.START' : null;
+    if (g) P(`  ${v}.gravity = ${g}`);
   }
   // add `v` to `parent` with LinearLayout params from its own style + the
   // parent's flex axis / cross-alignment. Flexbox/RN default is
@@ -278,19 +299,24 @@ function emit(ast, opts) {
     }
     if (name === 'Text') {
       const info = textExpr(el, scope);
-      if (info.dynamic && !scope.__inrow) {
+      const staticTxt = () => cstr(st && st.textTransform === 'uppercase' ? info.staticText.toUpperCase() : st && st.textTransform === 'lowercase' ? info.staticText.toLowerCase() : info.staticText);
+      // field-backed when it has dynamic text OR a reactive (cell-driven) colour,
+      // so an update fn can reach it. Inside a .map row everything rebuilds instead.
+      if (!scope.__inrow && (info.dynamic || styleReactive(st))) {
         const f = field(vid('lbl'), 'TextView');
         P(`  s.${f} = TextView(appCtx)`);
-        const real = textExpr(el, scope);
-        P(`  s.${f}!!.text = ${real.expr}`);
-        info.reads.forEach((cn) => deps[cn] && deps[cn].push(`s.${f}!!.text = ${real.expr};`));
+        if (info.dynamic) {
+          const real = textExpr(el, scope);
+          P(`  s.${f}!!.text = ${real.expr}`);
+          info.reads.forEach((cn) => deps[cn] && deps[cn].push(`s.${f}!!.text = ${real.expr};`));
+        } else P(`  s.${f}!!.text = ${staticTxt()}`);
         applyCommon(`s.${f}!!`, st); applyText(`s.${f}!!`, st);
+        reactiveColorRegister(`s.${f}!!`, st);
         if (parent) { pack(`s.${f}!!`, st, parentH, crossStretch); P(`  ${parent}.addView(s.${f})`); }
         return `s.${f}`;
       }
       const l = vid('t');
-      let txt = info.dynamic ? info.expr : cstr(st && st.textTransform === 'uppercase' ? info.staticText.toUpperCase() : st && st.textTransform === 'lowercase' ? info.staticText.toLowerCase() : info.staticText);
-      P(`  val ${l} = TextView(appCtx); ${l}.text = ${txt}`);
+      P(`  val ${l} = TextView(appCtx); ${l}.text = ${info.dynamic ? info.expr : staticTxt()}`);
       applyCommon(l, st); applyText(l, st);
       if (parent) { pack(l, st, parentH, crossStretch); P(`  ${parent}.addView(${l})`); }
       return l;
@@ -312,7 +338,7 @@ function emit(ast, opts) {
       P(`  ${bref}.minWidth = 0; ${bref}.minimumWidth = 0; ${bref}.minHeight = 0; ${bref}.minimumHeight = 0`);
       P(`  ${bref}.setPadding(0, 0, 0, 0); ${bref}.stateListAnimator = null`);
       if (dynTitle && !scope.__inrow) { const snip = `${bref}.text = ${cexprText(dynTitle, scope)};`; cellsIn(dynTitle).forEach((cn) => deps[cn] && deps[cn].push(snip)); }
-      applyCommon(bref, st); applyText(bref, st);
+      applyCommon(bref, st); applyText(bref, st, 'center');
       let press = a.onPress || a.onClick;
       if (press) {
         const lines = handlerLines(press, scope, null);
@@ -450,7 +476,7 @@ function emit(ast, opts) {
     }
     if (name === 'Separator') {
       const v = vid('sep');
-      P(`  val ${v} = View(appCtx); ${v}.setBackgroundColor(swissColor(${cstr(col((st && st.backgroundColor) || 'border'))}))`);
+      P(`  val ${v} = View(appCtx); ${v}.setBackgroundColor(${colorCode((st && st.backgroundColor) || 'border')})`);
       const horiz = !(st && st.flexDirection === 'row');
       P(`  ${v}.layoutParams = LinearLayout.LayoutParams(${horiz ? 'ViewGroup.LayoutParams.MATCH_PARENT, dp(1)' : 'dp(1), ViewGroup.LayoutParams.MATCH_PARENT'})`);
       if (parent) P(`  ${parent}.addView(${v})`);
@@ -607,15 +633,17 @@ function emit(ast, opts) {
   const rootVar = build(rootJSX(), null, { __parentHorizontal: false });
   emitLists();
 
-  // useEffect(fn, deps) → fn at startup; re-run on dep-cell change
-  const initLines = []; let effN = 0;
+  // useEffect(fn, deps) → fn at startup; re-run on dep-cell change.
+  // effectCalls run ONCE at mount; listCalls (list rebuilds) + visibility are
+  // re-runnable on a theme rebuild without double-firing mount side effects.
+  const effectCalls = []; let effN = 0;
   for (const s of comp.body.body)
     walk(s, (n) => {
       if (n.type === 'CallExpression' && n.callee.name === 'useEffect') {
         const id = `swiss_effect_${effN++}`;
         const lines = []; genStmts(n.arguments[0].body, {}, lines);
         out.fns.push(`fun ${id}(s: SwissState) {\n${lines.join('\n')}\n}`);
-        initLines.push(`  ${id}(s)`);
+        effectCalls.push(`  ${id}(s)`);
         const da = n.arguments[1];
         if (da && da.type === 'ArrayExpression')
           for (const d of da.elements) { const cell = d.type === 'Identifier' ? cellByName(d.name) : null; if (cell) deps[cell.name].push(`${id}(s);`); }
@@ -635,7 +663,9 @@ function emit(ast, opts) {
   for (const c of arrayCells)
     if (c.initArr) for (const el of c.initArr.elements)
       if (el && el.type === 'ObjectExpression') initCellLines.push(`  s.${c.name}.add(${objLit(c, el, {})})`);
-  for (const L of out.lists) initLines.push(`  ${L.rebuildFn}(s)`);
+  const listCalls = out.lists.map((L) => `  ${L.rebuildFn}(s)`);
+  // relayout = re-runnable on rebuild (visibility + list fills); effect = mount-once
+  const relayoutLines = [...out.postShow.map((x) => '  ' + x), ...listCalls];
 
   // cell update functions
   for (const c of cells)
@@ -709,11 +739,19 @@ fun swissGap(v: LinearLayout, g: Int, horizontal: Boolean) {
     v.getChildAt(i).layoutParams = lp
   }
 }
+// ── theme tokens (light, dark) resolved at runtime so they flip on setTheme ──
+var swissDark = false
+val swissTokens: Map<String, IntArray> = mapOf(
+${TOKENS.map((t) => `  ${cstr(t)} to intArrayOf(swissColor(${cstr(THEME[t][0])}), swissColor(${cstr(THEME[t][1])}))`).join(',\n')}
+)
+fun swissToken(name: String): Int { val p = swissTokens[name] ?: return Color.TRANSPARENT; return p[if (swissDark) 1 else 0] }
+
 fun swissAlert(msg: String) { AlertDialog.Builder(appCtx).setMessage(msg).setPositiveButton("OK", null).show() }
 // NOTE: Android dialogs are async — a blocking confirm() can't return a result
 // inline. This shows the dialog and returns 0; wire a callback for real use.
 fun swissConfirm(msg: String): Boolean { AlertDialog.Builder(appCtx).setMessage(msg).setPositiveButton("OK", null).setNegativeButton("Cancel", null).show(); return false }
-fun swissSetTheme(dark: Boolean) { /* live re-theme is a documented gap on this target */ }
+// live re-theme: flip the palette + rebuild the view tree from current state
+fun swissSetTheme(dark: Boolean) { if (swissDark == dark) return; swissDark = dark; swissRebuild() }
 fun swissPickFolder(): String = ""   // needs the Storage Access Framework (async)
 fun swissPickFile(): String = ""
 fun swissLoadImage(v: ImageView, src: String) { /* hook a real loader (Glide/Coil) here */ }
@@ -742,8 +780,27 @@ ${out.build.join('\n')}
   return ${rootVar.replace(/!!$/, '')}
 }
 
+// re-runnable after a (re)build: reapply conditional visibility + refill lists.
+// Safe on a theme rebuild (no mount side effects).
+fun swissRelayout(s: SwissState) {
+${relayoutLines.join('\n') || '  // nothing to relayout'}
+}
+
 fun swissEffect(s: SwissState) {
-${[...out.postShow.map((x) => '  ' + x), ...initLines].join('\n') || '  // no effects'}
+  swissRelayout(s)
+${effectCalls.join('\n') || '  // no mount effects'}
+}
+
+// theme change → rebuild the tree from current state (SwissState persists), so
+// every token-coloured view repaints. Infrequent (only on setTheme).
+var swissScroll: ScrollView? = null
+fun swissRebuild() {
+  val sc = swissScroll ?: return
+  sc.removeAllViews()
+  val root = swissBuildUi(S)
+  root.setBackgroundColor(swissToken("bg"))
+  sc.addView(root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+  swissRelayout(S)
 }
 
 class MainActivity : Activity() {
@@ -753,10 +810,11 @@ class MainActivity : Activity() {
     S = SwissState()
     swissInit(S)
     val root = swissBuildUi(S)
-    root.setBackgroundColor(swissColor(${cstr(col('bg'))}))
+    root.setBackgroundColor(swissToken("bg"))
     val scroll = ScrollView(this)
     scroll.isFillViewport = true   // let the root fill the screen so flex:1 expands (still scrolls if content overflows)
     scroll.addView(root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+    swissScroll = scroll
     setContentView(scroll)
     swissEffect(S)
   }
