@@ -1,0 +1,1 @@
+{ "name": "swiss-test", "version": "0.1.0", "entry": "src/main.jsx", "backend": "backend/main.ez", "platforms": ["web"], "permissions": [], "web": { "title": "swiss-test" } }
