@@ -213,7 +213,8 @@ function emit(ast, opts) {
     const gradSrc = st && (st.backgroundImage || (typeof st.background === 'string' && /gradient/.test(st.background)) || (typeof st.backgroundColor === 'string' && /gradient/.test(st.backgroundColor)));
     const grad = gradSrc ? parseGradient(gradSrc) : null;
     const wrap = st && (st.flexWrap === 'wrap' || st.flexWrap === 'wrap-reverse') ? 1 : 0;
-    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross, radius, shadow, borderw, bordercol, opacity, overflow, abspos, atop, aleft, aright, abottom, zindex, grad, wrap };
+    const clipkids = st && st.overflow === 'hidden' ? 1 : 0;
+    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross, radius, shadow, borderw, bordercol, opacity, overflow, abspos, atop, aleft, aright, abottom, zindex, grad, wrap, clipkids };
   }
   // apply font + text color to a freshly created control hwnd expr
   function applyControl(hw, st, kind, scope) {
@@ -323,6 +324,7 @@ function emit(ast, opts) {
       if (na.abspos) out.build.push(`  ${nv}->abspos = 1; ${nv}->atop = ${na.atop === -1000000 ? '-1000000' : `SC(${na.atop})`}; ${nv}->aleft = ${na.aleft === -1000000 ? '-1000000' : `SC(${na.aleft})`}; ${nv}->aright = ${na.aright === -1000000 ? '-1000000' : `SC(${na.aright})`}; ${nv}->abottom = ${na.abottom === -1000000 ? '-1000000' : `SC(${na.abottom})`}; ${nv}->zindex = ${na.zindex};`);
       if (na.grad) { const gc = (x) => tokIdx(x) >= 0 ? `swiss_tok(${tokIdx(x)})` : (colorref(x) || 'RGB(0,0,0)'); out.build.push(`  ${nv}->hasgrad = 1; ${nv}->hasbg = 1; ${nv}->gradangle = ${na.grad.angle}; ${nv}->gradc1 = ${gc(na.grad.c1)}; ${nv}->gradc2 = ${gc(na.grad.c2)};`); }
       if (na.wrap) out.build.push(`  ${nv}->wrap = 1;`);
+      if (na.clipkids) out.build.push(`  ${nv}->clipkids = 1;`);
       if (na.mt || na.mb || na.ml || na.mr) out.build.push(`  ${nv}->mt = SC(${na.mt}); ${nv}->mb = SC(${na.mb}); ${nv}->ml = SC(${na.ml}); ${nv}->mr = SC(${na.mr});`);
       // reactive LAYOUT + APPEARANCE: style={cond?A:B} differing in size/spacing
       // (→ relayout) and/or radius/opacity/border (→ repaint just this node's rect).
@@ -912,6 +914,7 @@ typedef struct Node {
   int abspos, atop, aleft, aright, abottom, zindex;   // position:absolute (root-relative) + z-order
   int hasgrad, gradangle; COLORREF gradc1, gradc2;    // background: linear-gradient(angle, c1, c2)
   int wrap;                  // flexWrap → wrap row children onto new lines
+  int clipkids;              // overflow:hidden → clip descendant controls to this (rounded) rect
 } Node;
 
 static HINSTANCE g_hinst;
@@ -997,7 +1000,7 @@ static void swiss_measure(Node* n, int* mw, int* mh) {
 // overflow:auto — while laying out an overflow subtree this holds the viewport
 // rect (client coords); leaves inside are window-region-clipped to it so scrolled
 // content stays within the box.
-static RECT g_clip; static int g_clipping;
+static RECT g_clip; static int g_clipping, g_clip_radius;
 static void swiss_arrange(Node* n, int x, int y, int w, int h) {
   int moved = (n->rx != x || n->ry != y || n->rw != w || n->rh != h);  // skip no-op moves (less flicker)
   n->rx = x; n->ry = y; n->rw = w; n->rh = h;   // remember rect for bg painting
@@ -1020,11 +1023,14 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
         if (n->radius > 0 && !swiss_is_btn(n->hwnd) && !swiss_is_pill(n->hwnd))
           SetWindowRgn(n->hwnd, CreateRoundRectRgn(0, 0, w + 1, h + 1, n->radius * 2, n->radius * 2), TRUE);
         // inside an overflow subtree: clip this leaf to the scroll viewport
-        else if (g_clipping) {
+        else if (g_clipping) {   // inside an overflow subtree: clip to the (rounded) viewport
           RECT lr = { x, y, x + w, y + h }, is;
-          if (IntersectRect(&is, &lr, &g_clip))
-            SetWindowRgn(n->hwnd, CreateRectRgn(is.left - x, is.top - y, is.right - x, is.bottom - y), TRUE);
-          else SetWindowRgn(n->hwnd, CreateRectRgn(0, 0, 0, 0), TRUE);
+          if (IntersectRect(&is, &lr, &g_clip)) {
+            HRGN rg;
+            if (g_clip_radius > 0) { rg = CreateRoundRectRgn(g_clip.left, g_clip.top, g_clip.right + 1, g_clip.bottom + 1, g_clip_radius * 2, g_clip_radius * 2); HRGN lf = CreateRectRgn(x, y, x + w, y + h); CombineRgn(rg, rg, lf, RGN_AND); DeleteObject(lf); OffsetRgn(rg, -x, -y); }
+            else rg = CreateRectRgn(is.left - x, is.top - y, is.right - x, is.bottom - y);
+            SetWindowRgn(n->hwnd, rg, TRUE);
+          } else SetWindowRgn(n->hwnd, CreateRectRgn(0, 0, 0, 0), TRUE);
         } else if (!n->radius) SetWindowRgn(n->hwnd, NULL, TRUE);   // clear any stale clip when scrolled back into view
       }
     }
@@ -1056,7 +1062,12 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
   // overflow:auto (vertical): clamp the scroll offset to the content, shift the
   // content up by it, and clip children to the viewport during this subtree.
   int scroff = 0;
-  RECT clipSave = g_clip; int clippingSave = g_clipping;
+  RECT clipSave = g_clip; int clippingSave = g_clipping, radiusSave = g_clip_radius;
+  if (n->clipkids) {   // overflow:hidden → clip descendants to this (rounded) rect
+    RECT vp = { x, y, x + w, y + h };
+    if (g_clipping) IntersectRect(&g_clip, &clipSave, &vp); else g_clip = vp;
+    g_clipping = 1; g_clip_radius = n->radius;
+  }
   if (n->overflow && !n->dir) {
     n->contenth = used;
     int maxs = used - avail; if (maxs < 0) maxs = 0;
@@ -1097,7 +1108,7 @@ static void swiss_arrange(Node* n, int x, int y, int w, int h) {
     else        swiss_arrange(c, ix + leadC + co, cursor, cc, cm);
     cursor += cm + trailM + n->gap;                      // trailing main margin after
   }
-  if (n->overflow && !n->dir) { g_clip = clipSave; g_clipping = clippingSave; }
+  if ((n->overflow && !n->dir) || n->clipkids) { g_clip = clipSave; g_clipping = clippingSave; g_clip_radius = radiusSave; }
 }
 
 // innermost overflow node whose laid-out rect contains a client point (wheel)
@@ -1296,7 +1307,10 @@ static void swiss_paint_bg(Node* n, HDC hdc) {
     RECT tr = { sbx, ty, sbx + sbw, ty + th };
     swiss_fill_round(hdc, tr, sbw / 2, C2A(RGB(193, 197, 203)), 0, 0);
   }
+  int _clipsv = 0;
+  if (n->clipkids && n->radius > 0) { _clipsv = SaveDC(hdc); HRGN _rg = CreateRoundRectRgn(n->rx, n->ry, n->rx + n->rw + 1, n->ry + n->rh + 1, n->radius * 2, n->radius * 2); SelectClipRgn(hdc, _rg); DeleteObject(_rg); }   // overflow:hidden clips child View backgrounds too
   for (int i = 0; i < n->nkids; i++) if (n->kids[i]->visible && !n->kids[i]->abspos) swiss_paint_bg(n->kids[i], hdc);
+  if (_clipsv) RestoreDC(hdc, _clipsv);
 }
 // soft rounded border around inputs (drawn behind the inset EDIT), accent when focused
 static HWND g_focus;

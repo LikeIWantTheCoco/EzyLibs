@@ -337,6 +337,8 @@ function emit(ast, opts) {
         pack(sc); return sc;
       }
       applyStyle(v, st); addClass(v);
+      // overflow:hidden → clip children to the rounded rect (cairo clip pre-draw)
+      if (st && st.overflow === 'hidden') out.build.push(`  g_signal_connect(${v}, "draw", G_CALLBACK(swiss_clip_draw), (gpointer)(intptr_t)${Number((st && st.borderRadius) || 0)});`);
       // position:absolute/fixed → float over the UI via the root GtkOverlay,
       // positioned by margins + alignment (root-relative), stacked by zIndex.
       if (st && (st.position === 'absolute' || st.position === 'fixed')) {
@@ -807,6 +809,24 @@ static long long swiss_indexof(const char* s, const char* sub) { const char* p =
 // timers: a void(SwissState*) callback driven by g_timeout
 static struct { guint id; void (*cb)(SwissState*); int repeat; } g_timers[32]; static int g_ntimers;
 static gboolean swiss_timer_tramp(gpointer ud) { int i = (int)(intptr_t)ud; g_timers[i].cb(&S); return g_timers[i].repeat ? G_SOURCE_CONTINUE : G_SOURCE_REMOVE; }
+// overflow:hidden — draw the widget's own background + all children ourselves
+// inside a rounded clip, so children are clipped to the rounded rect.
+static void swiss_prop_child(GtkWidget* child, gpointer data) { void** d = (void**)data; gtk_container_propagate_draw(GTK_CONTAINER(d[0]), child, (cairo_t*)d[1]); }
+static gboolean swiss_clip_draw(GtkWidget* w, cairo_t* cr, gpointer rad) {
+  int r = (int)(intptr_t)rad; GtkAllocation a; gtk_widget_get_allocation(w, &a);
+  double ww = a.width, hh = a.height; if (r > ww / 2) r = ww / 2; if (r > hh / 2) r = hh / 2;
+  cairo_new_path(cr);
+  cairo_arc(cr, ww - r, r, r, -G_PI / 2, 0);
+  cairo_arc(cr, ww - r, hh - r, r, 0, G_PI / 2);
+  cairo_arc(cr, r, hh - r, r, G_PI / 2, G_PI);
+  cairo_arc(cr, r, r, r, G_PI, 3 * G_PI / 2);
+  cairo_close_path(cr); cairo_clip(cr);
+  GtkStyleContext* ctx = gtk_widget_get_style_context(w);
+  gtk_render_background(ctx, cr, 0, 0, ww, hh);
+  gtk_render_frame(ctx, cr, 0, 0, ww, hh);
+  void* d[2] = { w, cr }; gtk_container_forall(GTK_CONTAINER(w), swiss_prop_child, d);
+  return TRUE;   // fully handled — children drawn inside the clip
+}
 static long long swiss_timer_add(long long ms, void (*cb)(SwissState*), int repeat) {
   int i = g_ntimers < 32 ? g_ntimers++ : 0; g_timers[i].cb = cb; g_timers[i].repeat = repeat;
   g_timers[i].id = g_timeout_add((guint)ms, swiss_timer_tramp, (gpointer)(intptr_t)i); return (long long)g_timers[i].id;
