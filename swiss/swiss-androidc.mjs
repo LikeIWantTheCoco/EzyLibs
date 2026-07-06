@@ -141,25 +141,37 @@ function emit(ast, opts) {
     const g = st.textAlign === 'center' ? 'Gravity.CENTER_HORIZONTAL' : st.textAlign === 'right' ? 'Gravity.END' : 'Gravity.START';
     P(`  ${v}.gravity = ${g}`);
   }
-  // add `v` to `parent` with LinearLayout params derived from its own style
-  function pack(v, st, parentHorizontal) {
-    if (!parentHorizontal && parentHorizontal !== false) parentHorizontal = false;
-    const wants = (dim) => st && st[dim];
-    let w = 'ViewGroup.LayoutParams.WRAP_CONTENT', h = 'ViewGroup.LayoutParams.WRAP_CONTENT';
-    if (st && (st.fillCross)) w = 'ViewGroup.LayoutParams.MATCH_PARENT';
-    if (st && st.width != null) w = `dp(${Number(st.width)})`;
-    if (st && st.height != null) h = `dp(${Number(st.height)})`;
-    // flex → weight, main-axis dimension 0 (Android convention)
-    const weight = st && (st.flex || st.flexGrow) ? Number(st.flex || st.flexGrow) : 0;
-    if (weight) { if (parentHorizontal) w = '0'; else h = '0'; }
-    P(`  run { val _lp = LinearLayout.LayoutParams(${w}, ${h})`);
+  // add `v` to `parent` with LinearLayout params from its own style + the
+  // parent's flex axis / cross-alignment. Flexbox/RN default is
+  // alignItems:stretch → a child fills the CROSS axis unless it sets an explicit
+  // cross size or an alignSelf. Explicit main size wins; flex → 0 + weight.
+  function pack(v, st, parentHorizontal, crossStretch) {
+    st = st || {};
+    const flex = Number(st.flex || st.flexGrow || 0);
+    const explicitW = st.width != null ? `dp(${Number(st.width)})` : st.fillCross ? 'MP' : null;
+    const explicitH = st.height != null ? `dp(${Number(st.height)})` : null;
+    const stretch = crossStretch !== false && !st.alignSelf;   // default stretch across the cross axis
+    let w, h, weight = 0;
+    if (parentHorizontal) {                    // main = width, cross = height
+      w = flex ? '0' : (explicitW || 'WC'); if (flex) weight = flex;
+      h = explicitH || (stretch ? 'MP' : 'WC');
+    } else {                                   // main = height, cross = width
+      h = flex ? '0' : (explicitH || 'WC'); if (flex) weight = flex;
+      w = explicitW || (stretch ? 'MP' : 'WC');
+    }
+    const dim = (x) => x === 'MP' ? 'ViewGroup.LayoutParams.MATCH_PARENT' : x === 'WC' ? 'ViewGroup.LayoutParams.WRAP_CONTENT' : x;
+    P(`  run { val _lp = LinearLayout.LayoutParams(${dim(w)}, ${dim(h)})`);
     if (weight) P(`    _lp.weight = ${weight}f`);
-    if (st && st.margin != null) P(`    _lp.setMargins(dp(${st.margin}), dp(${st.margin}), dp(${st.margin}), dp(${st.margin}))`);
-    if (st && st.marginTop != null) P(`    _lp.topMargin = dp(${st.marginTop})`);
-    if (st && st.marginBottom != null) P(`    _lp.bottomMargin = dp(${st.marginBottom})`);
-    if (st && st.marginLeft != null) P(`    _lp.leftMargin = dp(${st.marginLeft})`);
-    if (st && st.marginRight != null) P(`    _lp.rightMargin = dp(${st.marginRight})`);
-    if (st && st.alignSelf === 'center') P(`    _lp.gravity = Gravity.CENTER_HORIZONTAL`);
+    if (st.margin != null) P(`    _lp.setMargins(dp(${st.margin}), dp(${st.margin}), dp(${st.margin}), dp(${st.margin}))`);
+    if (st.marginTop != null) P(`    _lp.topMargin = dp(${st.marginTop})`);
+    if (st.marginBottom != null) P(`    _lp.bottomMargin = dp(${st.marginBottom})`);
+    if (st.marginLeft != null) P(`    _lp.leftMargin = dp(${st.marginLeft})`);
+    if (st.marginRight != null) P(`    _lp.rightMargin = dp(${st.marginRight})`);
+    // alignSelf → this child's own cross-axis gravity within the row/column
+    const asg = st.alignSelf === 'center' ? 'Gravity.CENTER'
+      : st.alignSelf === 'flex-end' ? (parentHorizontal ? 'Gravity.BOTTOM' : 'Gravity.END')
+      : st.alignSelf === 'flex-start' ? (parentHorizontal ? 'Gravity.TOP' : 'Gravity.START') : null;
+    if (asg) P(`    _lp.gravity = ${asg}`);
     P(`    ${v}.layoutParams = _lp }`);
   }
 
@@ -206,6 +218,7 @@ function emit(ast, opts) {
     const HSIZE = { h1: 28, h2: 23, h3: 19, h4: 16 };
     if (HSIZE[tag]) st = Object.assign({ fontSize: HSIZE[tag], fontWeight: 'bold' }, st || {});
     const parentH = !!(scope && scope.__parentHorizontal);
+    const crossStretch = !scope || scope.__crossStretch !== false;   // parent stretches its children (flex default)
 
     if (name === 'View' || name === 'Tab' || name === 'ScrollView') {
       const horizontal = !!(st && st.flexDirection === 'row');
@@ -214,11 +227,11 @@ function emit(ast, opts) {
         P(`  val ${sc} = ScrollView(appCtx)`);
         const inner = vid('v');
         P(`  val ${inner} = LinearLayout(appCtx); ${inner}.orientation = LinearLayout.VERTICAL`);
-        buildChildren(el.children, inner, { ...scope, __parentHorizontal: false }, false);
+        buildChildren(el.children, inner, { ...scope, __parentHorizontal: false, __crossStretch: true }, false);
         if (st && st.gap) P(`  swissGap(${inner}, dp(${Number(st.gap)}), false)`);
         applyCommon(inner, st);
         P(`  ${sc}.addView(${inner})`);
-        if (parent) { pack(sc, st, parentH); P(`  ${parent}.addView(${sc})`); }
+        if (parent) { pack(sc, st, parentH, crossStretch); P(`  ${parent}.addView(${sc})`); }
         return sc;
       }
       const v = vid('v');
@@ -231,9 +244,12 @@ function emit(ast, opts) {
         if (parts.length) P(`  ${v}.gravity = ${parts.join(' or ')}`);
       }
       applyCommon(v, st);
-      buildChildren(el.children, v, { ...scope, __parentHorizontal: horizontal }, false);
+      // this View stretches its children across the cross axis unless alignItems
+      // says otherwise (flexbox/RN default = stretch)
+      const childStretch = !st || !st.alignItems || st.alignItems === 'stretch';
+      buildChildren(el.children, v, { ...scope, __parentHorizontal: horizontal, __crossStretch: childStretch }, false);
       if (st && st.gap) P(`  swissGap(${v}, dp(${Number(st.gap)}), ${horizontal})`);
-      if (parent) { pack(v, st, parentH); P(`  ${parent}.addView(${v})`); }
+      if (parent) { pack(v, st, parentH, crossStretch); P(`  ${parent}.addView(${v})`); }
       return v;
     }
     if (name === 'Text') {
@@ -245,14 +261,14 @@ function emit(ast, opts) {
         P(`  s.${f}!!.text = ${real.expr}`);
         info.reads.forEach((cn) => deps[cn] && deps[cn].push(`s.${f}!!.text = ${real.expr};`));
         applyCommon(`s.${f}!!`, st); applyText(`s.${f}!!`, st);
-        if (parent) { pack(`s.${f}!!`, st, parentH); P(`  ${parent}.addView(s.${f})`); }
+        if (parent) { pack(`s.${f}!!`, st, parentH, crossStretch); P(`  ${parent}.addView(s.${f})`); }
         return `s.${f}`;
       }
       const l = vid('t');
       let txt = info.dynamic ? info.expr : cstr(st && st.textTransform === 'uppercase' ? info.staticText.toUpperCase() : st && st.textTransform === 'lowercase' ? info.staticText.toLowerCase() : info.staticText);
       P(`  val ${l} = TextView(appCtx); ${l}.text = ${txt}`);
       applyCommon(l, st); applyText(l, st);
-      if (parent) { pack(l, st, parentH); P(`  ${parent}.addView(${l})`); }
+      if (parent) { pack(l, st, parentH, crossStretch); P(`  ${parent}.addView(${l})`); }
       return l;
     }
     if (name === 'Button') {
@@ -267,6 +283,10 @@ function emit(ast, opts) {
       else P(`  val ${b} = Button(appCtx)`);
       P(`  ${bref}.text = ${dynTitle ? cexprText(dynTitle, scope) : cstr(label)}`);
       P(`  ${bref}.isAllCaps = false`);
+      // strip the platform Button chrome (min 88x48dp, elevation, default insets)
+      // so a flat, web-sized button honours its own width/padding
+      P(`  ${bref}.minWidth = 0; ${bref}.minimumWidth = 0; ${bref}.minHeight = 0; ${bref}.minimumHeight = 0`);
+      P(`  ${bref}.setPadding(0, 0, 0, 0); ${bref}.stateListAnimator = null`);
       if (dynTitle && !scope.__inrow) { const snip = `${bref}.text = ${cexprText(dynTitle, scope)};`; cellsIn(dynTitle).forEach((cn) => deps[cn] && deps[cn].push(snip)); }
       applyCommon(bref, st); applyText(bref, st);
       let press = a.onPress || a.onClick;
@@ -276,7 +296,7 @@ function emit(ast, opts) {
         lines.forEach((ln) => P('  ' + ln));
         P(`  }`);
       }
-      if (parent) { pack(bref, st, parentH); P(`  ${parent}.addView(${bref.replace(/!!$/, '')})`); }
+      if (parent) { pack(bref, st, parentH, crossStretch); P(`  ${parent}.addView(${bref.replace(/!!$/, '')})`); }
       return bref;
     }
     if (name === 'Input' || name === 'TextArea') {
@@ -307,7 +327,7 @@ function emit(ast, opts) {
         }
       }
       applyCommon(`s.${f}!!`, st); applyText(`s.${f}!!`, st);
-      if (parent) { pack(`s.${f}!!`, st, parentH); P(`  ${parent}.addView(s.${f})`); }
+      if (parent) { pack(`s.${f}!!`, st, parentH, crossStretch); P(`  ${parent}.addView(s.${f})`); }
       return `s.${f}`;
     }
     if (name === 'Switch') {
@@ -322,7 +342,7 @@ function emit(ast, opts) {
         P(`  }`);
       }
       applyCommon(`s.${f}!!`, st);
-      if (parent) { pack(`s.${f}!!`, st, parentH); P(`  ${parent}.addView(s.${f})`); }
+      if (parent) { pack(`s.${f}!!`, st, parentH, crossStretch); P(`  ${parent}.addView(s.${f})`); }
       return `s.${f}`;
     }
     if (name === 'Checkbox') {
@@ -337,7 +357,7 @@ function emit(ast, opts) {
         P(`  }`);
       }
       applyCommon(`s.${f}!!`, st);
-      if (parent) { pack(`s.${f}!!`, st, parentH); P(`  ${parent}.addView(s.${f})`); }
+      if (parent) { pack(`s.${f}!!`, st, parentH, crossStretch); P(`  ${parent}.addView(s.${f})`); }
       return `s.${f}`;
     }
     if (name === 'Slider') {
@@ -357,7 +377,7 @@ function emit(ast, opts) {
         P(`  })`);
       }
       applyCommon(`s.${f}!!`, st);
-      if (parent) { pack(`s.${f}!!`, st, parentH); P(`  ${parent}.addView(s.${f})`); }
+      if (parent) { pack(`s.${f}!!`, st, parentH, crossStretch); P(`  ${parent}.addView(s.${f})`); }
       return `s.${f}`;
     }
     if (name === 'ProgressBar') {
@@ -367,7 +387,7 @@ function emit(ast, opts) {
       P(`  s.${f} = ProgressBar(appCtx, null, android.R.attr.progressBarStyleHorizontal); s.${f}!!.max = ${max}`);
       if (cell) { P(`  s.${f}!!.progress = (s.${cell.name}).toInt()`); deps[cell.name].push(`s.${f}!!.progress = (s.${cell.name}).toInt();`); }
       applyCommon(`s.${f}!!`, st);
-      if (parent) { pack(`s.${f}!!`, st, parentH); P(`  ${parent}.addView(s.${f})`); }
+      if (parent) { pack(`s.${f}!!`, st, parentH, crossStretch); P(`  ${parent}.addView(s.${f})`); }
       return `s.${f}`;
     }
     if (name === 'Select') {
@@ -387,14 +407,14 @@ function emit(ast, opts) {
         P(`  }`);
       }
       applyCommon(`s.${f}!!`, st);
-      if (parent) { pack(`s.${f}!!`, st, parentH); P(`  ${parent}.addView(s.${f})`); }
+      if (parent) { pack(`s.${f}!!`, st, parentH, crossStretch); P(`  ${parent}.addView(s.${f})`); }
       return `s.${f}`;
     }
     if (name === 'Image') {
       const v = vid('img');
       P(`  val ${v} = ImageView(appCtx); swissLoadImage(${v}, ${cstr(strAttr(a.src))})`);
       applyCommon(v, st);
-      if (parent) { pack(v, st, parentH); P(`  ${parent}.addView(${v})`); }
+      if (parent) { pack(v, st, parentH, crossStretch); P(`  ${parent}.addView(${v})`); }
       return v;
     }
     if (name === 'Separator') {
@@ -704,6 +724,7 @@ class MainActivity : Activity() {
     val root = swissBuildUi(S)
     root.setBackgroundColor(swissColor(${cstr(col('bg'))}))
     val scroll = ScrollView(this)
+    scroll.isFillViewport = true   // let the root fill the screen so flex:1 expands (still scrolls if content overflows)
     scroll.addView(root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     setContentView(scroll)
     swissEffect(S)
