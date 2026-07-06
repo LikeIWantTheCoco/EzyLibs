@@ -137,6 +137,18 @@ export function createFrontend(ast, opts) {
       }
     }
   }
+  // module-level `const X = <literal>` (outside the component) are also derived —
+  // e.g. `const TABS = ['Home','Search']` used in a build-time .map unroll. The
+  // component body wins on name collision, so only add names not already set.
+  for (const stmt of ast.program.body) {
+    if (stmt.type !== 'VariableDeclaration') continue;
+    for (const d of stmt.declarations) {
+      if (d.id.type !== 'Identifier' || !d.init || derived[d.id.name]) continue;
+      const it = d.init;
+      if (it.type === 'CallExpression') continue; // StyleSheet.create / hooks handled elsewhere
+      derived[d.id.name] = it;
+    }
+  }
   const cellByName = (n) => cells.find((c) => c.name === n);
   const cellBySetter = (n) => cells.find((c) => c.setter === n);
   const methodByName = (n) => methods.find((m) => m.name === n);

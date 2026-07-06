@@ -593,6 +593,15 @@ function emit(ast, opts) {
         }
         if (ex.type === 'CallExpression' && ex.callee.type === 'MemberExpression' && ex.callee.property.name === 'map') {
           const o = ex.callee.object;
+          // a const/derived array literal → unroll at build time (static list)
+          let lit = o.type === 'ArrayExpression' ? o : (o.type === 'Identifier' && derived[o.name] && stripParens(derived[o.name]).type === 'ArrayExpression' ? stripParens(derived[o.name]) : null);
+          if (lit && !lit.elements.every((e) => e && e.type !== 'ObjectExpression' && e.type !== 'ArrayExpression')) lit = null; // scalars only
+          if (lit) {
+            const p = ex.arguments[0].params; const itN = p[0] ? p[0].name : 'it'; const ixN = p[1] ? p[1].name : null;
+            const body = stripParens(ex.arguments[0].body);
+            lit.elements.forEach((elm, i) => { if (!elm) return; const v = cexpr(elm, scope); const rs = { ...scope, [itN]: { c: v.c, t: v.t } }; if (ixN) rs[ixN] = { c: String(i), t: 'int' }; const j = jsxOf(body); if (j) build(j, parentVar, rs); });
+            continue;
+          }
           // arr.map(...)
           if (o.type === 'Identifier' && cellByName(o.name) && cellByName(o.name).t === 'array') { buildMap(ex, parentVar, scope, o.name, null); continue; }
           // arr.filter(pred).map(...)

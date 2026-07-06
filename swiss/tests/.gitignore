@@ -2,3 +2,4 @@ template/node_modules
 template/emit-*
 template/dist
 template/.swiss
+template/src/swiss
