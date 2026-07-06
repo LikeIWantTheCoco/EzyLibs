@@ -28,6 +28,15 @@ const tokIdx = (v) => (isToken(v) ? TOKENS.indexOf(v) : -1);
 // C table of [light,dark] COLORREFs per token, in TOKENS order.
 const rgbC = (h) => { h = String(h).replace('#', ''); return `RGB(0x${h.slice(0, 2)}, 0x${h.slice(2, 4)}, 0x${h.slice(4, 6)})`; };
 const tokTableC = () => TOKENS.map((t) => `  { ${rgbC(THEME[t][0])}, ${rgbC(THEME[t][1])} },   // ${t}`).join('\n');
+// parse a 2-stop linear-gradient: `linear-gradient([Ndeg,] c1, c2)` → {angle, c1, c2}
+const parseGradient = (s) => {
+  const m = String(s).match(/linear-gradient\(([^)]*)\)/); if (!m) return null;
+  const parts = m[1].split(',').map((x) => x.trim());
+  let angle = 180, cols = parts;
+  if (/deg$/.test(parts[0])) { angle = parseInt(parts[0]); cols = parts.slice(1); }
+  if (cols.length < 2) return null;
+  return { angle, c1: cols[0], c2: cols[cols.length - 1] };
+};
 
 // ───────────────────────── emit ─────────────────────────
 function emit(ast, opts) {
@@ -200,7 +209,9 @@ function emit(ast, opts) {
     const aright = st && st.right != null ? Number(st.right) : NS;
     const abottom = st && st.bottom != null ? Number(st.bottom) : NS;
     const zindex = st && st.zIndex ? Number(st.zIndex) : 0;
-    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross, radius, shadow, borderw, bordercol, opacity, overflow, abspos, atop, aleft, aright, abottom, zindex };
+    const gradSrc = st && (st.backgroundImage || (typeof st.background === 'string' && /gradient/.test(st.background)) || (typeof st.backgroundColor === 'string' && /gradient/.test(st.backgroundColor)));
+    const grad = gradSrc ? parseGradient(gradSrc) : null;
+    return { dir, pad, gap, w, h, flex, align, justify, selfalign, mt, mb, ml, mr, fillcross, radius, shadow, borderw, bordercol, opacity, overflow, abspos, atop, aleft, aright, abottom, zindex, grad };
   }
   // apply font + text color to a freshly created control hwnd expr
   function applyControl(hw, st, kind, scope) {
@@ -308,6 +319,7 @@ function emit(ast, opts) {
       if (na.opacity < 1) out.build.push(`  ${nv}->alpha = ${Math.round(na.opacity * 255)};`);
       if (na.overflow) out.build.push(`  ${nv}->overflow = 1;`);
       if (na.abspos) out.build.push(`  ${nv}->abspos = 1; ${nv}->atop = ${na.atop === -1000000 ? '-1000000' : `SC(${na.atop})`}; ${nv}->aleft = ${na.aleft === -1000000 ? '-1000000' : `SC(${na.aleft})`}; ${nv}->aright = ${na.aright === -1000000 ? '-1000000' : `SC(${na.aright})`}; ${nv}->abottom = ${na.abottom === -1000000 ? '-1000000' : `SC(${na.abottom})`}; ${nv}->zindex = ${na.zindex};`);
+      if (na.grad) { const gc = (x) => tokIdx(x) >= 0 ? `swiss_tok(${tokIdx(x)})` : (colorref(x) || 'RGB(0,0,0)'); out.build.push(`  ${nv}->hasgrad = 1; ${nv}->hasbg = 1; ${nv}->gradangle = ${na.grad.angle}; ${nv}->gradc1 = ${gc(na.grad.c1)}; ${nv}->gradc2 = ${gc(na.grad.c2)};`); }
       if (na.mt || na.mb || na.ml || na.mr) out.build.push(`  ${nv}->mt = SC(${na.mt}); ${nv}->mb = SC(${na.mb}); ${nv}->ml = SC(${na.ml}); ${nv}->mr = SC(${na.mr});`);
       // reactive LAYOUT + APPEARANCE: style={cond?A:B} differing in size/spacing
       // (→ relayout) and/or radius/opacity/border (→ repaint just this node's rect).
@@ -862,6 +874,19 @@ static void swiss_fill_round(HDC hdc, RECT rc, int r, ARGB fill, ARGB border, fl
   if (bw > 0) { GpPen* pen = NULL; GdipCreatePen1(border, bw, 2 /* UnitPixel */, &pen); if (pen) { GdipDrawPath(g, pen, p); GdipDeletePen(pen); } }
   GdipDeletePath(p); GdipDeleteGraphics(g);
 }
+typedef struct { int X, Y, Width, Height; } GpRectI2;
+GpStatus WINAPI GdipCreateLineBrushFromRectWithAngleI(const GpRectI2*, ARGB, ARGB, float, BOOL, int, GpBrush**);
+// antialiased rounded fill with a 2-stop linear gradient at a CSS-ish angle
+static void swiss_fill_grad(HDC hdc, RECT rc, int r, ARGB c1, ARGB c2, int cssAngle) {
+  GpGraphics* g = NULL; if (GdipCreateFromHDC(hdc, &g) != 0 || !g) return;
+  GdipSetSmoothingMode(g, 4);
+  GpPath* p = NULL; GdipCreatePath(0, &p);
+  swiss_round_path(p, (float)rc.left + 0.5f, (float)rc.top + 0.5f, (float)(rc.right - rc.left) - 1, (float)(rc.bottom - rc.top) - 1, (float)r);
+  GpRectI2 gr = { rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top };
+  GpBrush* b = NULL; GdipCreateLineBrushFromRectWithAngleI(&gr, c1, c2, (float)(cssAngle - 90), TRUE, 0, &b);   // CSS 90deg=→ ; GDI+ 0=→
+  if (b) { GdipFillPath(g, b, p); GdipDeleteBrush(b); }
+  GdipDeletePath(p); GdipDeleteGraphics(g);
+}
 // ── runtime layout node tree (stack/flex, recomputed on resize) ──
 typedef struct Node {
   HWND hwnd;                 // control window (NULL for a pure container)
@@ -882,6 +907,7 @@ typedef struct Node {
   COLORREF bg; int hasbg, visible;
   int bgtok;                 // theme token+1 for the background (0 = use bg literal) — resolved at paint
   int abspos, atop, aleft, aright, abottom, zindex;   // position:absolute (root-relative) + z-order
+  int hasgrad, gradangle; COLORREF gradc1, gradc2;    // background: linear-gradient(angle, c1, c2)
 } Node;
 
 static HINSTANCE g_hinst;
@@ -1225,7 +1251,10 @@ static void swiss_paint_bg(Node* n, HDC hdc) {
     if (n->shadow) swiss_shadow(hdc, r, n->radius);            // drop shadow behind the panel
     int a = n->alpha ? n->alpha : 255;                          // opacity (0 = unset = opaque)
     COLORREF nbg = n->bgtok ? swiss_tok(n->bgtok - 1) : n->bg;  // theme token resolves per current theme
-    if (n->hasbg && n->radius == 0 && a == 255 && !n->hasborder) {
+    if (n->hasgrad) {                                            // linear-gradient background
+      swiss_fill_grad(hdc, r, n->radius, ((ARGB)a << 24) | (C2A(n->gradc1) & 0xFFFFFFu), ((ARGB)a << 24) | (C2A(n->gradc2) & 0xFFFFFFu), n->gradangle);
+      if (n->hasborder) { GpGraphics* _g = NULL; if (GdipCreateFromHDC(hdc, &_g) == 0 && _g) { GdipSetSmoothingMode(_g, 4); GpPath* _p = NULL; GdipCreatePath(0, &_p); swiss_round_path(_p, r.left + 0.5f, r.top + 0.5f, (r.right - r.left) - 1, (r.bottom - r.top) - 1, (float)n->radius); GpPen* _pen = NULL; GdipCreatePen1(C2A(n->bordercol), (float)n->borderw, 2, &_pen); if (_pen) { GdipDrawPath(_g, _pen, _p); GdipDeletePen(_pen); } GdipDeletePath(_p); GdipDeleteGraphics(_g); } }
+    } else if (n->hasbg && n->radius == 0 && a == 255 && !n->hasborder) {
       HBRUSH b = CreateSolidBrush(nbg); FillRect(hdc, &r, b); DeleteObject(b);   // fast opaque path
     } else {
       ARGB fill = n->hasbg ? (((ARGB)a << 24) | (C2A(nbg) & 0xFFFFFFu)) : 0;      // alpha 0 = no fill (border only)

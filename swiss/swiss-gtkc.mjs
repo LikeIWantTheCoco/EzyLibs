@@ -77,6 +77,8 @@ function emit(ast, opts) {
       else if (k === 'fontWeight') css.push(`font-weight:${v}`);
       else if (k === 'color') css.push(`color:${col(v)}`);
       else if (k === 'backgroundColor') css.push(`background-color:${col(v)};background-image:none`);
+      else if (k === 'backgroundImage') css.push(`background-image:${v}`);   // linear/radial gradient
+      else if (k === 'background') { if (/gradient/.test(String(v))) css.push(`background-image:${v}`); else css.push(`background-color:${col(v)};background-image:none`); }
       else if (k === 'borderWidth') css.push(`border-width:${v}px;border-style:solid`);
       else if (k === 'borderColor') css.push(`border-color:${col(v)}`);
       else if (k === 'border') { if (v !== 'none') { const m = String(v).match(/(\d+)px\s+(\w+)\s+(\S+)/); if (m) css.push(`border-width:${m[1]}px;border-style:${m[2]};border-color:${col(m[3])}`); } }
@@ -123,7 +125,8 @@ function emit(ast, opts) {
       else if (k === 'letterSpacing') o.letterSpacing = num(s);
       else if (k === 'lineHeight') o.lineHeight = Number(s);
       else if (k === 'color') o.color = s;
-      else if (k === 'backgroundColor' || k === 'background') o.backgroundColor = s;
+      else if (k === 'backgroundColor' || k === 'background') { if (/gradient/.test(s)) o.backgroundImage = s; else o.backgroundColor = s; }
+      else if (k === 'backgroundImage') o.backgroundImage = s;
       else if (k === 'borderRadius') o.borderRadius = num(s);
       else if (k === 'boxShadow') o.boxShadow = s;
       else if (k === 'textAlign') o.textAlign = s;
