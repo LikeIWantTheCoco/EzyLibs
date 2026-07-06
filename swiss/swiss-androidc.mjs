@@ -661,8 +661,8 @@ fun swissGap(v: LinearLayout, g: Int, horizontal: Boolean) {
 fun swissAlert(msg: String) { AlertDialog.Builder(appCtx).setMessage(msg).setPositiveButton("OK", null).show() }
 // NOTE: Android dialogs are async — a blocking confirm() can't return a result
 // inline. This shows the dialog and returns 0; wire a callback for real use.
-fun swissConfirm(msg: String): Long { AlertDialog.Builder(appCtx).setMessage(msg).setPositiveButton("OK", null).setNegativeButton("Cancel", null).show(); return 0L }
-fun swissSetTheme(dark: Long) { /* live re-theme is a documented gap on this target */ }
+fun swissConfirm(msg: String): Boolean { AlertDialog.Builder(appCtx).setMessage(msg).setPositiveButton("OK", null).setNegativeButton("Cancel", null).show(); return false }
+fun swissSetTheme(dark: Boolean) { /* live re-theme is a documented gap on this target */ }
 fun swissPickFolder(): String = ""   // needs the Storage Access Framework (async)
 fun swissPickFile(): String = ""
 fun swissLoadImage(v: ImageView, src: String) { /* hook a real loader (Glide/Coil) here */ }

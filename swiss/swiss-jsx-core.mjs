@@ -473,8 +473,8 @@ export function createFrontend(ast, opts) {
         }
         if (c.type === 'MemberExpression' && c.object.name === 'console') return { c: B.consoleNoop(), t: 'void' };
         if (c.type === 'Identifier' && c.name === 'setTheme') {   // setTheme(dark) — dark/light toggle
-          const a = node.arguments[0] ? cexpr(node.arguments[0], scope).c : B.boolLit(false);
-          return { c: B.setTheme(a), t: 'void' };
+          const a = node.arguments[0] ? cexpr(node.arguments[0], scope) : { c: B.boolLit(false), t: 'bool' };
+          return { c: B.setTheme(B.truthy(a.c, a.t)), t: 'void' };
         }
         if (c.type === 'MemberExpression' && c.object.name === 'Math') {
           const A = node.arguments.map((x) => cexpr(x, scope).c);
@@ -491,7 +491,7 @@ export function createFrontend(ast, opts) {
         if (c.type === 'MemberExpression' && c.object.name === 'swiss') {
           if (c.property.name === 'pickFolder') return { c: B.pickFolder(), t: 'string' };
           if (c.property.name === 'pickFile') return { c: B.pickFile(), t: 'string' };
-          if (c.property.name === 'setTheme') return { c: B.setTheme(cexpr(node.arguments[0], scope).c), t: 'void' };
+          if (c.property.name === 'setTheme') { const a = cexpr(node.arguments[0], scope); return { c: B.setTheme(B.truthy(a.c, a.t)), t: 'void' }; }
           if (c.property.name === 'alert') return { c: B.alert(cexpr(node.arguments[0], scope).c), t: 'void' };
           if (c.property.name === 'confirm') return { c: B.confirm(cexpr(node.arguments[0], scope).c), t: 'bool' };
         }
