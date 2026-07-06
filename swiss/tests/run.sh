@@ -34,6 +34,9 @@ for c in "$CASES"/*.jsx; do
     if ( cd "$work" && swiss emit-app --platform "$plat" --out "$out" ) >/dev/null 2>&1; then
       if [ "$plat" = web ]; then
         [ -s "$work/$out/App.web.js" ] && r="ok"
+      elif [ "$plat" = android ]; then
+        # no Android SDK in CI → emit-only check (the .kt was produced), like web
+        [ -n "$(find "$work/$out" -name MainActivity.kt 2>/dev/null)" ] && r="ok"
       else
         if ( cd "$work/$out" && ./build.sh ) >/dev/null 2>&1; then r="ok"; fi
       fi

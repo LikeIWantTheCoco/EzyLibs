@@ -8,12 +8,14 @@ Targets: **web** (React + react-reconciler + DOM), **gtk** (JSX→C, GTK3),
 **win32** (JSX→C, Win32/GDI+), **android** (JSX→Kotlin, android.widget Views).
 macOS/iOS are planned, not here yet.
 
-> **android status**: the translator (`swiss-androidc.mjs`) emits Kotlin through
-> the decoupled core + `swiss-kt-backend.mjs`. Output is structurally complete
-> for the ✅ rows below and shaped to compile, but it is **not yet verified
-> against the Android SDK** (no `emit-app --platform android` gradle harness
-> yet) — unlike gtk/win32, which the regression harness compiles. Treat android
-> ✅ as "emitted + reviewed", not "compiled in CI".
+> **android status**: `swiss emit-app --platform android` produces a complete
+> Gradle project — `swiss-androidc.mjs` translates the JSX to Kotlin (through the
+> decoupled core + `swiss-kt-backend.mjs`), and if the app calls `ezy.call` the
+> backend is emitted to C + a JNI bridge built by the NDK. The regression harness
+> emit-checks every case to android (the `.kt` is produced). What's NOT yet in
+> CI is the final `./build.sh` (Gradle `assembleDebug`) — that needs the Android
+> SDK on the runner. So treat android ✅ as "emitted + reviewed + harness-checked",
+> not "APK compiled in CI".
 
 Legend: ✅ full · 🟡 partial (see note) · ❌ not yet · — n/a
 
@@ -88,10 +90,11 @@ Legend: ✅ full · 🟡 partial (see note) · ❌ not yet · — n/a
 
 ## Known native-only gaps (priority order)
 
-1. **android: compile against the SDK** — wire `emit-app --platform android`
-   (gradle project + AndroidManifest + `build.sh`) so the harness compiles the
-   emitted Kotlin, the way it compiles gtk/win32. Until then android is
-   emit-and-review only.
+1. **android: compile the APK in CI** — `emit-app --platform android` (Gradle
+   project + AndroidManifest + JNI + `build.sh`) is wired and the harness
+   emit-checks it; the missing piece is running `./build.sh` (Gradle
+   `assembleDebug`) on a runner with the Android SDK, the way gtk/win32 run
+   `cc`/MinGW. Until an SDK is on CI, android stops at emit-check.
 2. **Stateful child inside `.map`** — a static child instance gets isolated
    state; a dynamic list can't be statically allocated. Emits a clear error.
 3. **android: flex-wrap / absolute / overflow:hidden / linear-gradient /
@@ -104,7 +107,8 @@ core; stateful child components; `.map` over const scalar arrays; useEffect.
 
 ## How parity is enforced
 
-`tests/run.sh` emits every `tests/cases/*.jsx` to each target and compiles it
-(GTK C, Win32 C, web bundle). A change that breaks any target fails the run
-before it ships. Baseline: **33/33 green** (linux+windows+web × 11 cases).
-Android is emitted + reviewed but not in the compile matrix yet (see gap #1).
+`tests/run.sh [targets]` emits every `tests/cases/*.jsx` to each target: gtk C,
+Win32 C and the web bundle are **compiled**; android is **emit-checked** (the
+`.kt` is produced — no Android SDK on CI, see gap #1). A change that breaks any
+target fails the run before it ships. Baseline: **44/44 green**
+(linux+windows+web+android × 11 cases).

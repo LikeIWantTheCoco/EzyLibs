@@ -615,8 +615,10 @@ cmd_build() {
     linux|windows|macos) build_desktop "$platform" ;;   # GTK frontend, OS backend
     gtk|desktop)
          die "use an OS target, not '$platform': --platform linux|windows|macos (GTK is implicit on desktop). No --platform = host OS." ;;
-    android|ios|mobile)
-         die "platform '$platform' not in v0.1 (web + desktop). Mobile targets are the next milestone." ;;
+    android)
+         die "use 'swiss emit-app --platform android' → a Gradle project, then (cd <out> && ./build.sh) with the Android SDK. Direct 'swiss build --platform android' (SDK-driven) is not wired yet." ;;
+    ios|mobile)
+         die "platform '$platform' not in v0.1 (web + desktop + android emit). iOS is a later milestone." ;;
     *)   die "unknown platform '$platform'" ;;
   esac
 }
@@ -628,6 +630,174 @@ cmd_dev() {
   [ -n "$font" ] && { mkdir -p public/fonts && cp "$LIB"/assets/fonts/*.ttf public/fonts/ 2>/dev/null || true; }
   echo "swiss: starting dev server"
   VITE_SWISS_FONT="$font" npx vite
+}
+
+# Android target — JSX → Kotlin (swiss-androidc) over android.widget Views,
+# emitted as a self-contained Gradle project. Like the GTK/Win32 emit we stop
+# before the compiler: build.sh runs Gradle (needs the Android SDK) to finish.
+# If the app calls the Ezy backend (ezy.call), the backend is emitted to C and
+# built into a JNI .so (needs the NDK); otherwise the app is pure Kotlin.
+emit_android() {
+  out="$1"
+  aname=$(basename "$PWD")
+  # a valid Kotlin/Java package segment from the project name
+  seg=$(printf '%s' "$aname" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9'); [ -n "$seg" ] || seg=app
+  pkg="com.swiss.$seg"; pkgpath="com/swiss/$seg"
+  appmain="$out/app/src/main"
+  ktdir="$appmain/kotlin/$pkgpath"
+  rm -rf "$out"; mkdir -p "$ktdir" "$out/gradle/wrapper"
+
+  gen_permissions   # swiss.json permissions → .swiss/permissions/ (uses-permission lines)
+
+  # does the app call into the Ezy backend?  → JNI native lib; else pure Kotlin
+  backend=0
+  grep -qE 'ezy\.call\(' src/App.jsx 2>/dev/null && backend=1
+
+  # 1) frontend: React/JSX → Kotlin (MainActivity.kt)
+  echo "swiss: frontend JSX → Kotlin  →  $ktdir/MainActivity.kt"
+  sig="$out/.backend.sig.json"
+  node src/swiss/swiss-sig.mjs backend/*.ez --out "$sig" || die "swiss-sig failed"
+  node src/swiss/swiss-androidc.mjs src/App.jsx --out "$ktdir/MainActivity.kt" \
+       --pkg "$pkg" --sig "$sig" || die "frontend translation failed"
+
+  # 2) backend (only if called): Ezy → C + a JNI bridge → libswissbackend.so
+  nativeblock=""
+  if [ "$backend" = 1 ]; then
+    echo "swiss: backend  Ezy → C + JNI  →  $appmain/cpp/"
+    mkdir -p "$appmain/cpp"
+    ezy emit-c backend/main.ez > "$appmain/cpp/backend.c" || die "ezy emit-c failed"
+    sed -i 's/^int main(/int __ezy_backend_main(/' "$appmain/cpp/backend.c"
+    node -e '
+      const fs=require("fs"); const sig=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+      const pkg=process.argv[2].replace(/\./g,"_");
+      const jt=t=>t==="string"?"jstring":t==="float"?"jdouble":"jlong";
+      const ct=t=>t==="string"?"char*":t==="float"?"double":"long long";
+      const esc=s=>s.replace(/_/g,"_1");
+      let o=`#include <jni.h>\n#include <string.h>\n\n`;
+      for(const f in sig){ const s=sig[f];
+        o+=`extern ${ct(s.ret)} ${f}(`+(s.args.length?s.args.map(a=>a==="string"?"const char*":ct(a)).join(", "):"void")+`);\n`; }
+      o+=`\n`;
+      for(const f in sig){ const s=sig[f];
+        const params=["JNIEnv* env","jclass clz"].concat(s.args.map((a,i)=>`${jt(a)} a${i}`)).join(", ");
+        o+=`JNIEXPORT ${jt(s.ret)} JNICALL Java_${pkg}_MainActivityKt_${esc(f)}(${params}) {\n`;
+        const conv=[],pre=[],post=[];
+        s.args.forEach((a,i)=>{ if(a==="string"){ pre.push(`  const char* c${i} = (*env)->GetStringUTFChars(env, a${i}, 0);`); conv.push(`c${i}`); post.push(`  (*env)->ReleaseStringUTFChars(env, a${i}, c${i});`);} else conv.push(`a${i}`); });
+        if(pre.length) o+=pre.join("\n")+"\n";
+        const call=`${f}(${conv.join(", ")})`;
+        if(s.ret==="string"){ o+=`  char* _r = ${call};\n`+(post.length?post.join("\n")+"\n":"")+`  return (*env)->NewStringUTF(env, _r ? _r : "");\n`; }
+        else { o+=`  ${jt(s.ret)} _r = (${jt(s.ret)})${call};\n`+(post.length?post.join("\n")+"\n":"")+`  return _r;\n`; }
+        o+=`}\n\n`;
+      }
+      fs.writeFileSync(process.argv[3], o);
+    ' "$sig" "$pkg" "$appmain/cpp/jni_bridge.c" || die "JNI bridge generation failed"
+    cat > "$appmain/cpp/CMakeLists.txt" <<'CM'
+cmake_minimum_required(VERSION 3.18)
+project(swissbackend C)
+add_library(swissbackend SHARED backend.c jni_bridge.c)
+CM
+    nativeblock='
+    externalNativeBuild { cmake { path "src/main/cpp/CMakeLists.txt" } }'
+  fi
+  rm -f "$sig"
+
+  # 3) Gradle project scaffolding (platform widgets only — no AndroidX needed)
+  perms=""
+  [ -f .swiss/permissions/android-manifest.xml ] && perms=$(cat .swiss/permissions/android-manifest.xml)
+
+  cat > "$out/settings.gradle" <<EOF
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+}
+dependencyResolutionManagement {
+    repositories { google(); mavenCentral() }
+}
+rootProject.name = "$aname"
+include ":app"
+EOF
+
+  cat > "$out/build.gradle" <<'EOF'
+plugins {
+    id "com.android.application" version "8.1.4" apply false
+    id "org.jetbrains.kotlin.android" version "1.9.22" apply false
+}
+EOF
+
+  cat > "$out/gradle.properties" <<'EOF'
+android.useAndroidX=false
+org.gradle.jvmargs=-Xmx2048m
+kotlin.code.style=official
+EOF
+
+  cat > "$out/gradle/wrapper/gradle-wrapper.properties" <<'EOF'
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.5-bin.zip
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+EOF
+
+  cat > "$out/app/build.gradle" <<EOF
+plugins {
+    id "com.android.application"
+    id "org.jetbrains.kotlin.android"
+}
+android {
+    namespace "$pkg"
+    compileSdk 34
+    defaultConfig {
+        applicationId "$pkg"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }$nativeblock
+    buildTypes { release { minifyEnabled false } }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+}
+EOF
+
+  mkdir -p "$appmain"
+  cat > "$appmain/AndroidManifest.xml" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+$perms
+    <application
+        android:label="$aname"
+        android:theme="@android:style/Theme.Material.Light.DarkActionBar">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+EOF
+
+  cat > "$out/build.sh" <<'EOF'
+#!/bin/sh
+# Finish the Android build: assemble a debug APK with Gradle.
+# Toolchain (like GTK's cc / Win32's MinGW): the Android SDK + Gradle (+ the NDK
+# if the app calls the Ezy backend). Point ANDROID_SDK_ROOT/ANDROID_HOME at the
+# SDK and have `gradle` on PATH (or drop a Gradle wrapper into this dir).
+set -e
+if [ -n "$ANDROID_SDK_ROOT" ]; then echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+elif [ -n "$ANDROID_HOME" ]; then echo "sdk.dir=$ANDROID_HOME" > local.properties
+else echo "build.sh: set ANDROID_SDK_ROOT or ANDROID_HOME to your Android SDK" >&2; fi
+if [ -x ./gradlew ]; then G=./gradlew; else G=gradle; fi
+"$G" assembleDebug
+echo "built app/build/outputs/apk/debug/app-debug.apk"
+EOF
+  chmod +x "$out/build.sh"
+
+  echo "swiss: done — Android Gradle project emitted, not built."
+  echo "       frontend: $ktdir/MainActivity.kt   (Kotlin / android.widget)"
+  [ "$backend" = 1 ] && echo "       backend:  $appmain/cpp/   (Ezy → C + JNI, built by the NDK)"
+  echo "       compile:  (cd $out && ./build.sh)   # needs the Android SDK + Gradle"
 }
 
 # emit-app: produce a *source* copy of the project with everything lowered to C
@@ -651,8 +821,9 @@ cmd_emit_app() {
   case "$platform" in
     windows)     tr=win32c; gui="Win32"; mode=native ;;
     linux|macos) tr=gtkc;   gui="GTK";   mode=native ;;
+    android)     tr=androidc; gui="Android"; mode=android ;;
     web)         gui="web";              mode=web ;;
-    *)    die "emit-app: unknown platform '$platform' (use linux|windows|macos|web)" ;;
+    *)    die "emit-app: unknown platform '$platform' (use linux|windows|macos|android|web)" ;;
   esac
 
   # keep the project's runtime/translators in sync with the installed lib first
@@ -660,6 +831,13 @@ cmd_emit_app() {
 
   name=$(basename "$PWD")
   [ -n "$out" ] || out="${name}-emit-${platform}"
+
+  # android emits a full Gradle project (not a C-source mirror) — handle + return
+  if [ "$mode" = android ]; then
+    echo "swiss: emitting Android Gradle project → $out/  (platform: android)"
+    emit_android "$out"
+    return
+  fi
 
   echo "swiss: emitting $gui source copy → $out/  (platform: $platform)"
   rm -rf "$out"; mkdir -p "$out"
@@ -790,6 +968,7 @@ case "$1" in
     echo "  swiss build --platform web       web build (React DOM + wasm) → dist/"
     echo "  swiss package [--platform OS]    build + bundle a distributable (deps included)"
     echo "  swiss emit-app [--platform OS]   copy the project with JSX+Ezy lowered to C (not linked)"
+    echo "  swiss emit-app --platform android  emit a Gradle project (JSX→Kotlin, backend→JNI)"
     echo "  swiss emit-app --platform web    copy + readable bundle with the swiss widgets inlined"
     echo "  (GTK is implicit on desktop; the OS picks the backend compile target)"
     exit 1 ;;

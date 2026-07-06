@@ -597,6 +597,11 @@ function emit(ast, opts) {
     if (!s) return `external fun ${f}(): Long`;
     return `external fun ${f}(${s.args.map((t, i) => `a${i}: ${kt(t)}`).join(', ')}): ${kt(s.ret)}`;
   }).join('\n');
+  // if the app calls into the Ezy backend, load its JNI .so before any
+  // `external fun` runs (emit-app --platform android builds it via the NDK).
+  const backendLoader = out.externs.size
+    ? '\nprivate val _swissBackend = try { System.loadLibrary("swissbackend"); true } catch (e: Throwable) { false }'
+    : '';
 
   const itemClasses = [...arrayCells, ...objectCells].map((c) =>
     `data class ${c.struct}(${(c.fields.length ? c.fields : [{ name: '_u', ctype: 'Long' }]).map((f) => `var ${f.name}: ${f.ctype} = ${f.ctype === 'String' ? '""' : f.ctype === 'Double' ? '0.0' : f.ctype === 'Boolean' ? 'false' : '0L'}`).join(', ')})`
@@ -632,7 +637,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.*
 
-${externDecls || '// (no ezy backend calls)'}
+${externDecls || '// (no ezy backend calls)'}${backendLoader}
 
 ${itemClasses || '// (no record/object state)'}
 
