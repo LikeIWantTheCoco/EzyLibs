@@ -615,10 +615,9 @@ cmd_build() {
     linux|windows|macos) build_desktop "$platform" ;;   # GTK frontend, OS backend
     gtk|desktop)
          die "use an OS target, not '$platform': --platform linux|windows|macos (GTK is implicit on desktop). No --platform = host OS." ;;
-    android)
-         die "use 'swiss emit-app --platform android' → a Gradle project, then (cd <out> && ./build.sh) with the Android SDK. Direct 'swiss build --platform android' (SDK-driven) is not wired yet." ;;
+    android) build_android ;;   # emit Gradle project + provision SDK/Gradle → APK
     ios|mobile)
-         die "platform '$platform' not in v0.1 (web + desktop + android emit). iOS is a later milestone." ;;
+         die "platform '$platform' not in v0.1 (web + desktop + android). iOS is a later milestone." ;;
     *)   die "unknown platform '$platform'" ;;
   esac
 }
@@ -696,6 +695,7 @@ project(swissbackend C)
 add_library(swissbackend SHARED backend.c jni_bridge.c)
 CM
     nativeblock='
+    ndkVersion "26.1.10909125"
     externalNativeBuild { cmake { path "src/main/cpp/CMakeLists.txt" } }'
   fi
   rm -f "$sig"
@@ -798,6 +798,120 @@ EOF
   echo "       frontend: $ktdir/MainActivity.kt   (Kotlin / android.widget)"
   [ "$backend" = 1 ] && echo "       backend:  $appmain/cpp/   (Ezy → C + JNI, built by the NDK)"
   echo "       compile:  (cd $out && ./build.sh)   # needs the Android SDK + Gradle"
+}
+
+# ── Android build toolchain (SDK + Gradle + optional NDK), auto-provisioned ──
+# Swiss manages its own copies under ~/.ezy/swiss (like the win32 GTK sysroot),
+# so a fresh machine can build an APK after y/n consent — no Android Studio.
+SWISS_ANDROID_SDK="$HOME/.ezy/swiss/android-sdk"
+SWISS_GRADLE_DIR="$HOME/.ezy/swiss/gradle-8.5"
+SWISS_NDK_VER="26.1.10909125"
+SWISS_CMDTOOLS_URL="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+SWISS_GRADLE_URL="https://services.gradle.org/distributions/gradle-8.5-bin.zip"
+
+fetch() {  # $1=url $2=out
+  if   have curl; then curl -fL --retry 3 "$1" -o "$2"
+  elif have wget; then wget -O "$2" "$1"
+  else die "need curl or wget to download build tools"; fi
+}
+
+ensure_java() {
+  have java && return 0
+  ask_yn "Android builds need a JDK 17+. Install openjdk-17-jdk now? (sudo apt-get)" \
+    || die "aborted. Install a JDK 17+ and re-run."
+  have apt-get || die "no apt-get — install a JDK 17+ manually, then re-run."
+  eval "sudo apt-get install -y openjdk-17-jdk" || die "JDK install failed"
+}
+
+# locate an Android SDK (env / ~/Android/Sdk / managed), install cmdline-tools if
+# missing, then install+license the required packages. Exports ANDROID_SDK_ROOT.
+# $1=1 → also install the NDK + cmake (backend/JNI apps).
+ensure_android_sdk() {
+  want_ndk="$1"
+  ANDROID_SDK=""
+  for d in "$ANDROID_SDK_ROOT" "$ANDROID_HOME" "$HOME/Android/Sdk" "$SWISS_ANDROID_SDK"; do
+    [ -n "$d" ] && [ -d "$d" ] && { ANDROID_SDK="$d"; break; }
+  done
+  [ -n "$ANDROID_SDK" ] || ANDROID_SDK="$SWISS_ANDROID_SDK"
+
+  sdkm=""
+  for p in "$ANDROID_SDK/cmdline-tools/latest/bin/sdkmanager" "$ANDROID_SDK/cmdline-tools/bin/sdkmanager" "$ANDROID_SDK/tools/bin/sdkmanager"; do
+    [ -x "$p" ] && sdkm="$p" && break
+  done
+  if [ -z "$sdkm" ]; then
+    echo "swiss: Android SDK command-line tools not found." >&2
+    ask_yn "Download them (~120MB) and set up the SDK under $SWISS_ANDROID_SDK?" \
+      || die "aborted. Install the Android SDK + set ANDROID_SDK_ROOT, or re-run and accept."
+    have unzip || die "need 'unzip' to install the SDK (apt-get install unzip)"
+    ANDROID_SDK="$SWISS_ANDROID_SDK"; mkdir -p "$ANDROID_SDK/cmdline-tools"
+    tmp=$(mktemp -d)
+    echo "swiss: downloading Android command-line tools…"
+    fetch "$SWISS_CMDTOOLS_URL" "$tmp/cmdtools.zip" || die "cmdline-tools download failed"
+    ( cd "$tmp" && unzip -q cmdtools.zip ) || die "unzip failed"
+    rm -rf "$ANDROID_SDK/cmdline-tools/latest"; mv "$tmp/cmdline-tools" "$ANDROID_SDK/cmdline-tools/latest"
+    rm -rf "$tmp"
+    sdkm="$ANDROID_SDK/cmdline-tools/latest/bin/sdkmanager"
+  fi
+  export ANDROID_SDK_ROOT="$ANDROID_SDK"; export ANDROID_HOME="$ANDROID_SDK"
+
+  pkgs="platform-tools platforms;android-34 build-tools;34.0.0"
+  [ "$want_ndk" = 1 ] && pkgs="$pkgs ndk;$SWISS_NDK_VER cmake;3.22.1"
+  need=0
+  [ -x "$ANDROID_SDK/platform-tools/adb" ] || need=1
+  [ -d "$ANDROID_SDK/platforms/android-34" ] || need=1
+  [ -d "$ANDROID_SDK/build-tools/34.0.0" ] || need=1
+  if [ "$want_ndk" = 1 ]; then [ -d "$ANDROID_SDK/ndk/$SWISS_NDK_VER" ] || need=1; fi
+  if [ "$need" = 1 ]; then
+    ask_yn "Install Android SDK packages ($pkgs)? (~250MB, ~700MB more with NDK)" \
+      || die "aborted. Install the packages via sdkmanager and re-run."
+    yes | "$sdkm" --sdk_root="$ANDROID_SDK" --licenses >/dev/null 2>&1 || true
+    # shellcheck disable=SC2086
+    "$sdkm" --sdk_root="$ANDROID_SDK" $pkgs || die "sdkmanager package install failed"
+  fi
+}
+
+# Gradle: system gradle if present, else a managed 8.5. Sets $GRADLE.
+ensure_gradle() {
+  have gradle && { GRADLE=gradle; return 0; }
+  [ -x "$SWISS_GRADLE_DIR/bin/gradle" ] && { GRADLE="$SWISS_GRADLE_DIR/bin/gradle"; return 0; }
+  ask_yn "Gradle is required to build. Download Gradle 8.5 (~130MB) into $SWISS_GRADLE_DIR?" \
+    || die "aborted. Install gradle on PATH and re-run."
+  have unzip || die "need 'unzip' (apt-get install unzip)"
+  tmp=$(mktemp -d)
+  echo "swiss: downloading Gradle 8.5…"
+  fetch "$SWISS_GRADLE_URL" "$tmp/gradle.zip" || die "gradle download failed"
+  ( cd "$tmp" && unzip -q gradle.zip ) || die "unzip failed"
+  mkdir -p "$(dirname "$SWISS_GRADLE_DIR")"; rm -rf "$SWISS_GRADLE_DIR"; mv "$tmp/gradle-8.5" "$SWISS_GRADLE_DIR"; rm -rf "$tmp"
+  GRADLE="$SWISS_GRADLE_DIR/bin/gradle"
+}
+
+# Android target — emit the Gradle project (emit_android), provision the SDK +
+# Gradle (+ NDK for backend apps) with consent, then assemble a debug APK.
+build_android() {
+  [ -f swiss.json ] || die "no swiss.json — run inside a Swiss project"
+  have ezy  || die "ezy not found on PATH"
+  have node || die "node not found (the translator runs on Node at build time)"
+  [ -d "$LIB" ] && copy_runtime src/swiss
+
+  name=$(basename "$PWD")
+  work=.swiss/android
+  echo "swiss: emitting Android Gradle project → $work/"
+  emit_android "$work"
+
+  backend=0; grep -qE 'ezy\.call\(' src/App.jsx 2>/dev/null && backend=1
+  ensure_java
+  ensure_android_sdk "$backend"
+  ensure_gradle
+  echo "sdk.dir=$ANDROID_SDK_ROOT" > "$work/local.properties"
+
+  echo "swiss: assembling APK (gradle assembleDebug) — first run fetches AGP/Kotlin…"
+  ( cd "$work" && JAVA_HOME="${JAVA_HOME:-$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")}" \
+    "$GRADLE" --no-daemon assembleDebug ) || die "gradle build failed"
+  apk=$(find "$work/app/build/outputs/apk/debug" -name '*.apk' 2>/dev/null | head -1)
+  [ -n "$apk" ] || die "build finished but no APK was produced"
+  cp "$apk" "./$name-debug.apk"
+  echo "swiss: built ./$name-debug.apk"
+  echo "       install on a device/emulator:  adb install -r $name-debug.apk"
 }
 
 # emit-app: produce a *source* copy of the project with everything lowered to C
@@ -965,6 +1079,7 @@ case "$1" in
     echo "  swiss build --platform linux     desktop GTK app (linux)"
     echo "  swiss build --platform windows   native Win32 .exe (no GTK, system DLLs only)"
     echo "  swiss build --platform macos     desktop GTK app (macOS)"
+    echo "  swiss build --platform android   Android APK (auto-provisions SDK/Gradle/NDK, y/n)"
     echo "  swiss build --platform web       web build (React DOM + wasm) → dist/"
     echo "  swiss package [--platform OS]    build + bundle a distributable (deps included)"
     echo "  swiss emit-app [--platform OS]   copy the project with JSX+Ezy lowered to C (not linked)"

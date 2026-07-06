@@ -8,14 +8,16 @@ Targets: **web** (React + react-reconciler + DOM), **gtk** (JSX→C, GTK3),
 **win32** (JSX→C, Win32/GDI+), **android** (JSX→Kotlin, android.widget Views).
 macOS/iOS are planned, not here yet.
 
-> **android status**: `swiss emit-app --platform android` produces a complete
-> Gradle project — `swiss-androidc.mjs` translates the JSX to Kotlin (through the
-> decoupled core + `swiss-kt-backend.mjs`), and if the app calls `ezy.call` the
-> backend is emitted to C + a JNI bridge built by the NDK. The regression harness
-> emit-checks every case to android (the `.kt` is produced). What's NOT yet in
-> CI is the final `./build.sh` (Gradle `assembleDebug`) — that needs the Android
-> SDK on the runner. So treat android ✅ as "emitted + reviewed + harness-checked",
-> not "APK compiled in CI".
+> **android status**: `swiss build --platform android` produces an installable
+> **APK**, end-to-end. `swiss-androidc.mjs` translates the JSX to Kotlin (through
+> the decoupled core + `swiss-kt-backend.mjs`); `swiss build` auto-provisions the
+> toolchain it needs — the Android SDK (cmdline-tools + platform-34 + build-tools)
+> and Gradle, each behind a y/n prompt, downloaded into `~/.ezy/swiss` (like the
+> win32 GTK sysroot) — then runs Gradle `assembleDebug`. **Verified**: a Swiss
+> app compiles to a signed debug APK (pure-Kotlin path). `swiss emit-app
+> --platform android` still emits the Gradle project without building. Apps that
+> call `ezy.call` add an NDK-built JNI `.so` (NDK auto-provisioned too); that
+> native path is wired but its APK build is not yet re-verified here.
 
 Legend: ✅ full · 🟡 partial (see note) · ❌ not yet · — n/a
 
@@ -90,11 +92,11 @@ Legend: ✅ full · 🟡 partial (see note) · ❌ not yet · — n/a
 
 ## Known native-only gaps (priority order)
 
-1. **android: compile the APK in CI** — `emit-app --platform android` (Gradle
-   project + AndroidManifest + JNI + `build.sh`) is wired and the harness
-   emit-checks it; the missing piece is running `./build.sh` (Gradle
-   `assembleDebug`) on a runner with the Android SDK, the way gtk/win32 run
-   `cc`/MinGW. Until an SDK is on CI, android stops at emit-check.
+1. **android: APK build in CI + the JNI/backend path** — `swiss build
+   --platform android` builds a real APK locally (SDK/Gradle auto-provisioned),
+   verified for the pure-Kotlin path. Still open: (a) putting a full APK build in
+   CI (the harness only emit-checks — no SDK on the runner), and (b) re-verifying
+   an `ezy.call` app end-to-end (NDK-built JNI `.so` — wired, not re-run here).
 2. **Stateful child inside `.map`** — a static child instance gets isolated
    state; a dynamic list can't be statically allocated. Emits a clear error.
 3. **android: flex-wrap / absolute / overflow:hidden / linear-gradient /
