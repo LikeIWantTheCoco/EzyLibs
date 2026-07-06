@@ -14,10 +14,11 @@ macOS/iOS are planned, not here yet.
 > toolchain it needs — the Android SDK (cmdline-tools + platform-34 + build-tools)
 > and Gradle, each behind a y/n prompt, downloaded into `~/.ezy/swiss` (like the
 > win32 GTK sysroot) — then runs Gradle `assembleDebug`. **Verified**: a Swiss
-> app compiles to a signed debug APK (pure-Kotlin path). `swiss emit-app
-> --platform android` still emits the Gradle project without building. Apps that
-> call `ezy.call` add an NDK-built JNI `.so` (NDK auto-provisioned too); that
-> native path is wired but its APK build is not yet re-verified here.
+> app compiles to a signed debug APK. **Both paths verified**: a pure-Kotlin app,
+> and an `ezy.call` app whose Ezy backend is NDK-cross-compiled for all four ABIs
+> (arm64-v8a/armeabi-v7a/x86/x86_64) into `libswissbackend.so` and reached through
+> a generated JNI bridge. `swiss emit-app --platform android` still emits the
+> Gradle project without building.
 
 Legend: ✅ full · 🟡 partial (see note) · ❌ not yet · — n/a
 
@@ -92,11 +93,11 @@ Legend: ✅ full · 🟡 partial (see note) · ❌ not yet · — n/a
 
 ## Known native-only gaps (priority order)
 
-1. **android: APK build in CI + the JNI/backend path** — `swiss build
-   --platform android` builds a real APK locally (SDK/Gradle auto-provisioned),
-   verified for the pure-Kotlin path. Still open: (a) putting a full APK build in
-   CI (the harness only emit-checks — no SDK on the runner), and (b) re-verifying
-   an `ezy.call` app end-to-end (NDK-built JNI `.so` — wired, not re-run here).
+1. **android: APK build in CI** — `swiss build --platform android` builds a real
+   APK locally (SDK/Gradle/NDK auto-provisioned), verified for both the
+   pure-Kotlin and the `ezy.call`/JNI paths. Still open: putting a full APK build
+   in the harness matrix (it only emit-checks today — no Android SDK on the CI
+   runner). Also: on-device runtime smoke test (emulator).
 2. **Stateful child inside `.map`** — a static child instance gets isolated
    state; a dynamic list can't be statically allocated. Emits a clear error.
 3. **android: flex-wrap / absolute / overflow:hidden / linear-gradient /
