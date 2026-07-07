@@ -115,6 +115,7 @@ export const ktBackend = {
   alert: (msgCode) => `swissAlert(${msgCode})`,
   confirm: (msgCode) => `swissConfirm(${msgCode})`,
   setTheme: (code) => `swissSetTheme(${code})`,
+  systemDark: () => `swissSystemDark()`,   // true if the OS is in dark mode
   pickFolder: () => `swissPickFolder()`,
   pickFile: () => `swissPickFile()`,
   consoleNoop: () => `Unit`,

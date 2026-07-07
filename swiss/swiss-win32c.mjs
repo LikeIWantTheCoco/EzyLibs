@@ -1551,6 +1551,14 @@ static char* swiss_pick_file(void) {
   ofn.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY; if (!GetOpenFileNameA(&ofn)) buf[0] = 0;
   return swiss_strdup(buf);
 }
+// read the OS app theme from the registry so setTheme('system') can follow it
+static long long swiss_system_dark(void) {
+  DWORD v = 1, sz = sizeof v;
+  if (RegGetValueA(HKEY_CURRENT_USER, "Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Themes\\\\Personalize",
+        "AppsUseLightTheme", RRF_RT_REG_DWORD, NULL, &v, &sz) == ERROR_SUCCESS)
+    return v == 0 ? 1 : 0;
+  return 0;
+}
 static void swiss_set_theme(long long dark) {
   g_darktheme = dark ? 1 : 0;
   g_bgcol = dark ? RGB(30, 30, 30) : RGB(255, 255, 255);

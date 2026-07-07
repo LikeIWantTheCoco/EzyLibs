@@ -91,6 +91,7 @@ export const cBackend = {
   alert: (msgCode) => `swiss_alert(${msgCode})`,
   confirm: (msgCode) => `swiss_confirm(${msgCode})`,
   setTheme: (code) => `swiss_set_theme(${code})`,
+  systemDark: () => `swiss_system_dark()`,   // 1 if the OS is in dark mode
   pickFolder: () => `swiss_pick_folder()`,
   pickFile: () => `swiss_pick_file()`,
   consoleNoop: () => `((void)0)`,

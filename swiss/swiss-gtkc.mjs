@@ -883,6 +883,13 @@ static long long swiss_confirm(const char* msg) {
 // theme: a swappable CSS provider forcing a light (default) or dark base, so
 // the app looks the same regardless of the system GTK theme.
 static GtkCssProvider* g_theme_prov;
+// read the OS colour scheme (GNOME/portal) so setTheme('system') can follow it
+static long long swiss_system_dark(void) {
+  FILE* p = popen("gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null", "r");
+  if (!p) return 0;
+  char buf[128] = {0}; if (!fgets(buf, sizeof buf, p)) buf[0] = 0; pclose(p);
+  return strstr(buf, "dark") ? 1 : 0;
+}
 static void swiss_set_theme(long long dark) {
   g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme", (gboolean)dark, NULL);
   if (!g_theme_prov) {

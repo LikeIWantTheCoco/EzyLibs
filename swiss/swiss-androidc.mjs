@@ -383,7 +383,9 @@ function emit(ast, opts) {
       if (ist.borderWidth == null) { ist.borderWidth = 1; if (ist.borderColor == null) ist.borderColor = 'border'; }
       if (ist.borderRadius == null) ist.borderRadius = 4;
       if (ist.padding == null && ist.paddingLeft == null && ist.paddingTop == null) ist.padding = 8;
-      applyCommon(`s.${f}!!`, ist); applyText(`s.${f}!!`, ist);
+      if (ist.color == null) ist.color = 'text';   // typed text follows the theme (else stays black → invisible in dark)
+      applyCommon(`s.${f}!!`, ist); applyText(`s.${f}!!`, ist, 'left');
+      P(`  s.${f}!!.setHintTextColor(${colorCode('muted')})`);   // placeholder colour follows the theme too
       if (parent) { pack(`s.${f}!!`, ist, parentH, crossStretch); P(`  ${parent}.addView(s.${f})`); }
       return `s.${f}`;
     }
@@ -705,6 +707,7 @@ package ${pkg}
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -745,6 +748,13 @@ val swissTokens: Map<String, IntArray> = mapOf(
 ${TOKENS.map((t) => `  ${cstr(t)} to intArrayOf(swissColor(${cstr(THEME[t][0])}), swissColor(${cstr(THEME[t][1])}))`).join(',\n')}
 )
 fun swissToken(name: String): Int { val p = swissTokens[name] ?: return Color.TRANSPARENT; return p[if (swissDark) 1 else 0] }
+// setTheme('system') → follow the OS. Reading it also opts into live updates
+// (the Activity re-applies on a uiMode config change).
+var swissFollowSystem = false
+fun swissSystemDark(): Boolean {
+  swissFollowSystem = true
+  return (appCtx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+}
 
 fun swissAlert(msg: String) { AlertDialog.Builder(appCtx).setMessage(msg).setPositiveButton("OK", null).show() }
 // NOTE: Android dialogs are async — a blocking confirm() can't return a result
@@ -817,6 +827,12 @@ class MainActivity : Activity() {
     swissScroll = scroll
     setContentView(scroll)
     swissEffect(S)
+  }
+
+  // live-follow the OS theme when the app opted in via setTheme('system')
+  override fun onConfigurationChanged(newConfig: Configuration) {
+    super.onConfigurationChanged(newConfig)
+    if (swissFollowSystem) swissSetTheme(swissSystemDark())
   }
 }
 `;

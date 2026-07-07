@@ -418,7 +418,7 @@ XML
   # pthreads) so the binary stays self-contained — only system DLLs remain.
   "$CC" "$work/frontend.c" "$work/backend.o" "$work/winshim.o" "$work/manifest.o" -o "$name$EXT" \
     -mwindows -static $ezylib_flags \
-    -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshell32 -lole32 -lgdiplus -luxtheme -lwinpthread -lm
+    -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshell32 -lole32 -lgdiplus -luxtheme -ladvapi32 -lwinpthread -lm
   echo "swiss: built ./$name$EXT  (portable — links only Windows system DLLs)"
   echo "       quick test:  wine ./$name$EXT"
 }
@@ -768,7 +768,8 @@ $perms
     <application
         android:label="$aname"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
-        <activity android:name=".MainActivity" android:exported="true">
+        <activity android:name=".MainActivity" android:exported="true"
+            android:configChanges="uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -1040,7 +1041,7 @@ WINDRES=\${WINDRES:-x86_64-w64-mingw32-windres}
 "\$WINDRES" app.rc -o manifest.o
 "\$CC" src/App.c backend/main.c src/swiss/swiss-winshim.c manifest.o -o "$name.exe" \\
   -mwindows -static \\
-  -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshell32 -lole32 -lgdiplus -luxtheme -lwinpthread -lm
+  -luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshell32 -lole32 -lgdiplus -luxtheme -ladvapi32 -lwinpthread -lm
 echo "built ./$name.exe"
 EOF
   else

@@ -54,6 +54,12 @@ function injectFontFace() {
 export function setTheme(dark) {
   if (typeof document === 'undefined') return;
   injectFontFace();
+  // setTheme('system') → follow the OS colour scheme (and keep following it)
+  if (dark === 'system') {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    if (!setTheme._sysBound) { setTheme._sysBound = true; mq.addEventListener('change', () => setTheme('system')); }
+    dark = mq.matches;
+  }
   document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
   const el = document.getElementById('root') || document.body;
   if (el) { el.style.backgroundColor = 'var(--swiss-bg)'; el.style.color = 'var(--swiss-text)'; }
