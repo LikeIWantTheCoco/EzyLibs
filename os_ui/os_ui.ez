@@ -21,4 +21,5 @@ extern fn os_ui_pick_color(title: string) -> string        # "#rrggbb" ("" cance
 extern fn os_ui_pick_date(title: string) -> string         # "YYYY-MM-DD"
 extern fn os_ui_pick_item(title: string, items: string) -> string  # items newline-separated
 extern fn os_ui_password(title: string, prompt: string) -> string
+extern fn os_ui_theme() -> string          # system theme: "dark" / "light" / "unknown"
 extern fn os_ui_version() -> string

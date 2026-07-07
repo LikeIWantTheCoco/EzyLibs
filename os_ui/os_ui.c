@@ -431,4 +431,34 @@ char *os_ui_password(const char *title, const char *prompt) {
 #endif
 }
 
-char *os_ui_version(void) { return strdup("os_ui 1.3.0"); }
+/* system UI theme → "dark" / "light" ("unknown" where the C lib can't tell,
+ * e.g. android/ios — there the app runtime reads it from the platform). */
+char *os_ui_theme(void) {
+#if defined(UI_LINUX)
+    char *s = run_capture("gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null");
+    if (s && strstr(s, "dark")) { free(s); return strdup("dark"); }
+    if (s && *s) { free(s); return strdup("light"); }        /* gsettings answered, not dark */
+    if (s) free(s);
+    s = run_capture("gsettings get org.gnome.desktop.interface gtk-theme 2>/dev/null");
+    int dark = s && strstr(s, "dark"); if (s) free(s);
+    if (dark) return strdup("dark");
+    const char *e = getenv("GTK_THEME");
+    if (e && strstr(e, "dark")) return strdup("dark");
+    return strdup("light");
+#elif defined(UI_MACOS)
+    char *s = run_capture("defaults read -g AppleInterfaceStyle 2>/dev/null");
+    int dark = s && strstr(s, "Dark"); if (s) free(s);
+    return strdup(dark ? "dark" : "light");
+#elif defined(UI_WINDOWS)
+    DWORD v = 1, sz = sizeof v;
+    if (RegGetValueA(HKEY_CURRENT_USER,
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+            "AppsUseLightTheme", RRF_RT_REG_DWORD, NULL, &v, &sz) == ERROR_SUCCESS)
+        return strdup(v == 0 ? "dark" : "light");
+    return strdup("light");
+#else
+    return strdup("unknown");
+#endif
+}
+
+char *os_ui_version(void) { return strdup("os_ui 1.4.0"); }
