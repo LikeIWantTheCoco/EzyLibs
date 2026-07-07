@@ -909,7 +909,10 @@ static void swiss_set_theme(long long dark) {
     " button:active { box-shadow: inset 0 0 0 200px rgba(0,0,0,0.12); }"
     " entry { padding:4px 8px; border:1px solid @swiss_border; }"
     " entry:focus { border-color:@swiss_primary; }"
-    " button:focus, entry:focus, combobox:focus { outline-color:@swiss_primary; outline-style:solid; outline-width:2px; }"
+    // no focus outline on click (matches win32 / web :focus-visible). The forced
+    // 2px outline drew a blue ring on every mouse click; the input's border
+    // still accents on focus above. Keyboard nav keeps GTK's automatic cue.
+    " * { outline-style: none; outline-width: 0; }"
     " window { background-color:@swiss_bg; color:@swiss_text; }"
     " entry, textview, text { background-color:@swiss_card; color:@swiss_text; }";
   char* css = g_strconcat(dark ? ${cstr(tokenDefs(1))} : ${cstr(tokenDefs(0))}, shape, NULL);
